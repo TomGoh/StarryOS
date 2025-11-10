@@ -5,6 +5,7 @@ use axhal::uspace::UserContext;
 use axtask::current;
 use starry_core::task::{AsThread, Thread};
 use starry_signal::{SignalOSAction, SignalSet};
+use axlog::debug;
 
 use crate::task::do_exit;
 
@@ -18,8 +19,6 @@ pub fn check_signals(
     };
 
     let signo = sig.signo();
-    use axlog::debug;
-    use starry_core::task::AsThread;
     debug!("[PTRACE-DEBUG] check_signals: pid={} got signal {:?} action={:?}",
            thr.proc_data.proc.pid(), signo, os_action);
 
@@ -28,11 +27,10 @@ pub fn check_signals(
     #[cfg(feature = "ptrace")]
     {
         if starry_ptrace::is_being_traced() {
-            use axtask::current;
             let curr = current();
             let pid = curr.as_thread().proc_data.proc.pid();
             debug!("[PTRACE-DEBUG] check_signals: traced process, entering signal-delivery-stop for {:?} pid={}", signo, pid);
-            // Enter ptrace signal stop; tracer will resume us.
+            // Enter ptrace signal stop; tracer will resume the tracee later.
             starry_ptrace::signal_stop(signo as i32, uctx);
             debug!("[PTRACE-DEBUG] check_signals: returned from signal-delivery-stop for {:?} pid={}", signo, pid);
             // After resuming, the tracer has decided what to do with the signal.
