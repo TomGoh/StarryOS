@@ -102,4 +102,7 @@ mv "$IMAGE_NAME" "${DEST_DIR}/${DEST_IMAGE_NAME}"
 echo "Cleaning up rootfs directory..."
 rm -rf "$ROOTFS_DIR"
 
+# 7. Change the mod of the FD /dev/vhost-vsock to 777
+sudo chmod 777 /dev/vhost-vsock || echo "Warning: Could not change permissions of /dev/vhost-vsock. It may not exist on this system."
+
 echo "Done. Disk image created at ${DEST_DIR}/${DEST_IMAGE_NAME}"

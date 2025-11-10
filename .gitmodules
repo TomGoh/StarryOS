@@ -33,3 +33,4 @@
 [submodule "userspace/strace"]
 	path = userspace/strace
 	url = https://github.com/kylin-x-kernel/starry-strace.git
+	branch = main
