@@ -14,8 +14,8 @@ pub fn test_traceme_basic() -> TestResult {
             }
 
             // Raise SIGSTOP to notify parent we're ready
-            if let Err(e) = process::kill(0, libc::SIGSTOP) {
-                eprintln!("Child: kill(SIGSTOP) failed: {}", e);
+            if let Err(e) = process::raise(libc::SIGSTOP) {
+                eprintln!("Child: raise(SIGSTOP) failed: {}", e);
                 process::exit(1);
             }
 

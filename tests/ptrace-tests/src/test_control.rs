@@ -13,8 +13,8 @@ pub fn test_cont_basic() -> TestResult {
                 process::exit(1);
             }
 
-            if let Err(e) = process::kill(0, libc::SIGSTOP) {
-                eprintln!("Child: kill(SIGSTOP) failed: {}", e);
+            if let Err(e) = process::raise(libc::SIGSTOP) {
+                eprintln!("Child: raise(SIGSTOP) failed: {}", e);
                 process::exit(1);
             }
 
@@ -78,8 +78,8 @@ pub fn test_detach_basic() -> TestResult {
                 process::exit(1);
             }
 
-            if let Err(e) = process::kill(0, libc::SIGSTOP) {
-                eprintln!("Child: kill(SIGSTOP) failed: {}", e);
+            if let Err(e) = process::raise(libc::SIGSTOP) {
+                eprintln!("Child: raise(SIGSTOP) failed: {}", e);
                 process::exit(1);
             }
 
@@ -159,8 +159,8 @@ pub fn test_cont_with_signal() -> TestResult {
                 process::exit(1);
             }
 
-            if let Err(e) = process::kill(0, libc::SIGSTOP) {
-                eprintln!("Child: kill(SIGSTOP) failed: {}", e);
+            if let Err(e) = process::raise(libc::SIGSTOP) {
+                eprintln!("Child: raise(SIGSTOP) failed: {}", e);
                 process::exit(1);
             }
 
@@ -191,10 +191,33 @@ pub fn test_cont_with_signal() -> TestResult {
 
             print_success("PTRACE_CONT with SIGUSR1 issued");
 
-            // Give child time to handle signal and exit
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            // Wait for child to stop at signal delivery
+            if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                return Err(format!("waitpid (signal stop) failed: {}", e));
+            }
 
-            // Wait for child to exit
+            // Child should stop at the signal before handler executes
+            if !wifstopped(status) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("Expected child to stop at signal, got status: 0x{:x}", status));
+            }
+
+            let sig = wstopsig(status);
+            if sig != libc::SIGUSR1 {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("Expected stop at SIGUSR1, got signal: {}", sig));
+            }
+
+            print_success("Child stopped at SIGUSR1 delivery");
+
+            // Continue again with the signal to actually deliver it to the handler
+            // Passing 0 would suppress the signal, but we want to deliver it
+            if let Err(e) = ptrace::cont(child_pid, libc::SIGUSR1) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_CONT to deliver signal failed: {}", e));
+            }
+
+            // Wait for child to exit after handling signal
             if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
                 return Err(format!("waitpid (exit) failed: {}", e));
             }

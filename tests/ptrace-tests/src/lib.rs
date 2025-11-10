@@ -1,5 +1,3 @@
-use std::io;
-
 /// Test result type
 pub type TestResult = Result<(), String>;
 
@@ -191,6 +189,16 @@ pub mod process {
     pub fn exit(code: i32) -> ! {
         unsafe {
             libc::exit(code);
+        }
+    }
+
+    pub fn raise(sig: i32) -> io::Result<()> {
+        unsafe {
+            if libc::raise(sig) == -1 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
         }
     }
 }

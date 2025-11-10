@@ -14,8 +14,8 @@ pub fn test_peekdata_basic() -> TestResult {
             }
 
             // Raise SIGSTOP
-            if let Err(e) = process::kill(0, libc::SIGSTOP) {
-                eprintln!("Child: kill(SIGSTOP) failed: {}", e);
+            if let Err(e) = process::raise(libc::SIGSTOP) {
+                eprintln!("Child: raise(SIGSTOP) failed: {}", e);
                 process::exit(1);
             }
 
@@ -46,13 +46,16 @@ pub fn test_peekdata_basic() -> TestResult {
             }
 
             // Get the child's registers to find stack pointer
-            let regs = match ptrace::getregs(child_pid) {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = process::kill(child_pid, libc::SIGKILL);
-                    return Err(format!("PTRACE_GETREGS failed: {}", e));
-                }
+            let mut regs: libc::user_regs_struct = unsafe { std::mem::zeroed() };
+            let mut iov = libc::iovec {
+                iov_base: &mut regs as *mut _ as *mut libc::c_void,
+                iov_len: std::mem::size_of::<libc::user_regs_struct>(),
             };
+
+            if let Err(e) = ptrace::getregset(child_pid, ptrace::NT_PRSTATUS, &mut iov) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_GETREGSET failed: {}", e));
+            }
 
             let stack_addr = regs.sp as usize;
             print_success(&format!("Child SP: 0x{:016x}", stack_addr));
@@ -111,8 +114,8 @@ pub fn test_peekdata_string() -> TestResult {
             }
 
             // Raise SIGSTOP
-            if let Err(e) = process::kill(0, libc::SIGSTOP) {
-                eprintln!("Child: kill(SIGSTOP) failed: {}", e);
+            if let Err(e) = process::raise(libc::SIGSTOP) {
+                eprintln!("Child: raise(SIGSTOP) failed: {}", e);
                 process::exit(1);
             }
 
@@ -141,13 +144,16 @@ pub fn test_peekdata_string() -> TestResult {
             }
 
             // Get registers
-            let regs = match ptrace::getregs(child_pid) {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = process::kill(child_pid, libc::SIGKILL);
-                    return Err(format!("PTRACE_GETREGS failed: {}", e));
-                }
+            let mut regs: libc::user_regs_struct = unsafe { std::mem::zeroed() };
+            let mut iov = libc::iovec {
+                iov_base: &mut regs as *mut _ as *mut libc::c_void,
+                iov_len: std::mem::size_of::<libc::user_regs_struct>(),
             };
+
+            if let Err(e) = ptrace::getregset(child_pid, ptrace::NT_PRSTATUS, &mut iov) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_GETREGSET failed: {}", e));
+            }
 
             // Try reading multiple words from stack region
             let base_addr = (regs.sp as usize) & !7; // Align to 8 bytes
@@ -205,8 +211,8 @@ pub fn test_peekdata_invalid_addr() -> TestResult {
                 process::exit(1);
             }
 
-            if let Err(e) = process::kill(0, libc::SIGSTOP) {
-                eprintln!("Child: kill(SIGSTOP) failed: {}", e);
+            if let Err(e) = process::raise(libc::SIGSTOP) {
+                eprintln!("Child: raise(SIGSTOP) failed: {}", e);
                 process::exit(1);
             }
 

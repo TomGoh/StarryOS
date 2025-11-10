@@ -14,8 +14,8 @@ pub fn test_syscall_basic() -> TestResult {
             }
 
             // Raise SIGSTOP to sync with parent
-            if let Err(e) = process::kill(0, libc::SIGSTOP) {
-                eprintln!("Child: kill(SIGSTOP) failed: {}", e);
+            if let Err(e) = process::raise(libc::SIGSTOP) {
+                eprintln!("Child: raise(SIGSTOP) failed: {}", e);
                 process::exit(1);
             }
 
@@ -116,8 +116,8 @@ pub fn test_syscall_tracesysgood() -> TestResult {
             }
 
             // Raise SIGSTOP to sync with parent
-            if let Err(e) = process::kill(0, libc::SIGSTOP) {
-                eprintln!("Child: kill(SIGSTOP) failed: {}", e);
+            if let Err(e) = process::raise(libc::SIGSTOP) {
+                eprintln!("Child: raise(SIGSTOP) failed: {}", e);
                 process::exit(1);
             }
 
