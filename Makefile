@@ -33,6 +33,26 @@ img:
 	fi
 	@cp $(IMG) arceos/disk.img
 
+# Build ptrace test suite binary
+ptrace-tests:
+	@echo "Building ptrace test suite..."
+	@cd userspace/ptrace-tests && cargo build --release --target aarch64-unknown-linux-musl
+
+# Build disk image with ptrace tests
+ptrace-tests-disk:
+	@echo "Building disk image with ptrace tests..."
+	@bash scripts/build-ptrace-tests-disk.sh
+
+# Run ptrace tests in QEMU
+test-ptrace: defconfig ptrace-tests-disk
+	@echo "Running ptrace tests in QEMU..."
+	@# Temporarily replace init.sh with test version
+	@cp src/init.sh src/init.sh.backup 2>/dev/null || true
+	@cp src/init-test.sh src/init.sh
+	@make -C arceos run || (cp src/init.sh.backup src/init.sh 2>/dev/null; exit 1)
+	@# Restore original init.sh
+	@cp src/init.sh.backup src/init.sh 2>/dev/null || true
+
 defconfig justrun clean:
 	@make -C arceos $@
 
@@ -51,4 +71,4 @@ vf2:
 
 crosvm:
 	$(MAKE) --debug=v ARCH=aarch64 APP_FEATURES=crosvm MYPLAT=axplat-aarch64-crosvm-virt BUS=pci LOG=warn build
-.PHONY: build run justrun debug disasm clean
+.PHONY: build run justrun debug disasm clean img ptrace-tests ptrace-tests-disk test-ptrace
