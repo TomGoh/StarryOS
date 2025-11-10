@@ -2310,6 +2310,7 @@ dependencies = [
  "spin 0.10.0",
  "starry-core",
  "starry-process",
+ "starry-signal",
  "starry-vm",
 ]
 

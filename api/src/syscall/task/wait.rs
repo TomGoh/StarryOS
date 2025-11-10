@@ -92,13 +92,16 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
         // ptrace: check trace-stopped children first (feature-gated)
         #[cfg(feature = "ptrace")]
         {
+            debug!("[PTRACE-DEBUG] waitpid checking {} children for ptrace stops", children.len());
             for child in &children {
                 if let Some(status) = starry_ptrace::check_ptrace_stop(child.pid()) {
-                    debug!("waitpid: returning ptrace stop for pid={} status=0x{:x}", child.pid(), status);
+                    debug!("[PTRACE-DEBUG] waitpid: returning ptrace stop for pid={} status=0x{:x}", child.pid(), status);
                     if let Some(exit_code) = exit_code.nullable() {
                         exit_code.vm_write(status)?;
                     }
                     return Ok(Some(child.pid() as _));
+                } else {
+                    debug!("[PTRACE-DEBUG] waitpid: child pid={} not in ptrace stop", child.pid());
                 }
             }
         }

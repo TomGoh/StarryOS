@@ -18,6 +18,28 @@ pub fn check_signals(
     };
 
     let signo = sig.signo();
+    use axlog::debug;
+    use starry_core::task::AsThread;
+    debug!("[PTRACE-DEBUG] check_signals: pid={} got signal {:?} action={:?}",
+           thr.proc_data.proc.pid(), signo, os_action);
+
+    // If under ptrace, ALL signal deliveries should stop the tracee first
+    // (not just stop signals). This allows the tracer to intercept, modify, or suppress signals.
+    #[cfg(feature = "ptrace")]
+    {
+        if starry_ptrace::is_being_traced() {
+            use axtask::current;
+            let curr = current();
+            let pid = curr.as_thread().proc_data.proc.pid();
+            debug!("[PTRACE-DEBUG] check_signals: traced process, entering signal-delivery-stop for {:?} pid={}", signo, pid);
+            // Enter ptrace signal stop; tracer will resume us.
+            starry_ptrace::signal_stop(signo as i32, uctx);
+            debug!("[PTRACE-DEBUG] check_signals: returned from signal-delivery-stop for {:?} pid={}", signo, pid);
+            // After resuming, the tracer has decided what to do with the signal.
+            // If we reach here, proceed with the original action (handler will execute, etc.)
+        }
+    }
+
     match os_action {
         SignalOSAction::Terminate => {
             do_exit(signo as i32, true);
@@ -27,23 +49,19 @@ pub fn check_signals(
             do_exit(128 + signo as i32, true);
         }
         SignalOSAction::Stop => {
-            // If under ptrace, emulate signal-delivery stop instead of exiting.
-            // This is critical for PTRACE_TRACEME flows where the tracee raises SIGSTOP.
-            #[cfg(feature = "ptrace")]
+            // Stop signals need special handling even without ptrace
+            #[cfg(not(feature = "ptrace"))]
             {
-                // Enter ptrace signal stop; tracer will resume us.
-                starry_ptrace::signal_stop(signo as i32, uctx);
-                return true;
+                // Fallback (no ptrace support): exit with SIGHUP-equivalent code for now.
+                // TODO: implement proper job control stop (WIFSTOPPED) semantics.
+                do_exit(1, true);
             }
-            // Fallback (no ptrace support): exit with SIGHUP-equivalent code for now.
-            // TODO: implement proper job control stop (WIFSTOPPED) semantics.
-            do_exit(1, true);
         }
         SignalOSAction::Continue => {
             // TODO: implement continue
         }
         SignalOSAction::Handler => {
-            // do nothing
+            // do nothing - handler will execute
         }
     }
     true
