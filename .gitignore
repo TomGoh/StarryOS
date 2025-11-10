@@ -14,3 +14,4 @@
 *.swp
 *.swo
 alpine-minirootfs.tar.gz 
+src/init.sh.backup
