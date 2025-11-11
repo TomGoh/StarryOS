@@ -20,7 +20,12 @@ pub fn test_peekdata_basic() -> TestResult {
             }
 
             // Keep some known data in memory
-            let test_data: [u64; 4] = [0xDEADBEEFCAFEBABE, 0x1122334455667788, 0xABCDEF0123456789, 0x0000000000000042];
+            let test_data: [u64; 4] = [
+                0xDEADBEEFCAFEBABE,
+                0x1122334455667788,
+                0xABCDEF0123456789,
+                0x0000000000000042,
+            ];
 
             // Use the data to prevent optimization
             let sum: u64 = test_data.iter().sum();
@@ -166,10 +171,7 @@ pub fn test_peekdata_string() -> TestResult {
                         words_read += 1;
                         if i < 4 {
                             // Print first few words
-                            print_success(&format!(
-                                "  [0x{:016x}] = 0x{:016x}",
-                                addr, data as u64
-                            ));
+                            print_success(&format!("  [0x{:016x}] = 0x{:016x}", addr, data as u64));
                         }
                     }
                     Err(_) => {
@@ -187,7 +189,10 @@ pub fn test_peekdata_string() -> TestResult {
                 ));
             }
 
-            print_success(&format!("Successfully read {} words from memory", words_read));
+            print_success(&format!(
+                "Successfully read {} words from memory",
+                words_read
+            ));
 
             // Cleanup
             let _ = ptrace::cont(child_pid, 0);
@@ -235,9 +240,9 @@ pub fn test_peekdata_invalid_addr() -> TestResult {
 
             // Try to read from obviously invalid addresses
             let invalid_addrs = vec![
-                0x0,                          // NULL
-                0x1,                          // Very low address
-                0xFFFFFFFFFFFFFFFF,           // Very high address
+                0x0,                // NULL
+                0x1,                // Very low address
+                0xFFFFFFFFFFFFFFFF, // Very high address
             ];
 
             let mut all_failed_correctly = true;
@@ -281,7 +286,10 @@ pub fn run_all_tests() -> (usize, usize) {
     let tests: Vec<(&str, fn() -> TestResult)> = vec![
         ("PTRACE_PEEKDATA - Basic", test_peekdata_basic),
         ("PTRACE_PEEKDATA - String Reading", test_peekdata_string),
-        ("PTRACE_PEEKDATA - Invalid Address", test_peekdata_invalid_addr),
+        (
+            "PTRACE_PEEKDATA - Invalid Address",
+            test_peekdata_invalid_addr,
+        ),
     ];
 
     let mut passed = 0;

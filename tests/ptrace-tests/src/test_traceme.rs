@@ -60,7 +60,10 @@ pub fn test_traceme_basic() -> TestResult {
             }
 
             if !wifexited(status) {
-                return Err(format!("Expected child to exit, got status: 0x{:x}", status));
+                return Err(format!(
+                    "Expected child to exit, got status: 0x{:x}",
+                    status
+                ));
             }
 
             let exit_code = wexitstatus(status);
@@ -110,7 +113,10 @@ pub fn test_traceme_marks_traced() -> TestResult {
             }
 
             if !wifexited(status) {
-                return Err(format!("Expected child to exit, got status: 0x{:x}", status));
+                return Err(format!(
+                    "Expected child to exit, got status: 0x{:x}",
+                    status
+                ));
             }
 
             let exit_code = wexitstatus(status);
@@ -130,10 +136,7 @@ pub fn test_traceme_marks_traced() -> TestResult {
 pub fn run_all_tests() -> (usize, usize) {
     let tests: Vec<(&str, fn() -> TestResult)> = vec![
         ("PTRACE_TRACEME - Basic", test_traceme_basic),
-        (
-            "PTRACE_TRACEME - Marks Traced",
-            test_traceme_marks_traced,
-        ),
+        ("PTRACE_TRACEME - Marks Traced", test_traceme_marks_traced),
     ];
 
     let mut passed = 0;

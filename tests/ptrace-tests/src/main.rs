@@ -1,15 +1,19 @@
 use ptrace_tests::*;
 use std::env;
 
-mod test_traceme;
-mod test_syscall;
-mod test_regs;
-mod test_memory;
+mod test_attach;
 mod test_control;
+mod test_memory;
+mod test_regs;
+mod test_syscall;
+mod test_traceme;
 
 fn print_banner() {
     println!("\n{}", "=".repeat(60));
-    println!("{}  StarryOS Ptrace Test Suite  {}", COLOR_BLUE, COLOR_RESET);
+    println!(
+        "{}  StarryOS Ptrace Test Suite  {}",
+        COLOR_BLUE, COLOR_RESET
+    );
     println!("{}", "=".repeat(60));
 }
 
@@ -69,6 +73,7 @@ fn main() {
         ("regs", test_regs::run_all_tests),
         ("memory", test_memory::run_all_tests),
         ("control", test_control::run_all_tests),
+        ("attach", test_attach::run_all_tests),
     ];
 
     // Run tests
@@ -80,7 +85,10 @@ fn main() {
             }
         }
 
-        println!("\n{}Running {} tests...{}", COLOR_BLUE, suite_name, COLOR_RESET);
+        println!(
+            "\n{}Running {} tests...{}",
+            COLOR_BLUE, suite_name, COLOR_RESET
+        );
 
         let (passed, failed) = run_suite();
         total_passed += passed;
@@ -107,10 +115,15 @@ fn print_usage(program: &str) {
     println!("Usage: {} [OPTIONS]", program);
     println!("\nOptions:");
     println!("  -v, --verbose       Enable verbose output");
-    println!("  --test=<suite>      Run specific test suite (traceme, syscall, regs, memory, control)");
+    println!(
+        "  --test=<suite>      Run specific test suite (traceme, syscall, regs, memory, control, attach)"
+    );
     println!("  -h, --help          Print this help message");
     println!("\nExamples:");
     println!("  {}                  Run all tests", program);
     println!("  {} --test=traceme   Run only traceme tests", program);
-    println!("  {} -v               Run all tests with verbose output", program);
+    println!(
+        "  {} -v               Run all tests with verbose output",
+        program
+    );
 }

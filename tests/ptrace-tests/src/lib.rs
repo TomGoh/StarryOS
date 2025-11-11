@@ -36,6 +36,7 @@ pub mod ptrace {
     pub const PTRACE_PEEKDATA: u32 = 2;
     pub const PTRACE_CONT: u32 = 7;
     pub const PTRACE_GETREGS: u32 = 12;
+    pub const PTRACE_ATTACH: u32 = 16;
     pub const PTRACE_DETACH: u32 = 17;
     pub const PTRACE_SYSCALL: u32 = 24;
     pub const PTRACE_SETOPTIONS: u32 = 0x4200;
@@ -54,6 +55,16 @@ pub mod ptrace {
     pub fn traceme() -> io::Result<()> {
         unsafe {
             if libc::ptrace(PTRACE_TRACEME as i32, 0, 0, 0) == -1 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    pub fn attach(pid: i32) -> io::Result<()> {
+        unsafe {
+            if libc::ptrace(PTRACE_ATTACH as i32, pid, 0, 0) == -1 {
                 Err(io::Error::last_os_error())
             } else {
                 Ok(())

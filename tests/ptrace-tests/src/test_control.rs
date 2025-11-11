@@ -51,7 +51,10 @@ pub fn test_cont_basic() -> TestResult {
             }
 
             if !wifexited(status) {
-                return Err(format!("Expected child to exit, got status: 0x{:x}", status));
+                return Err(format!(
+                    "Expected child to exit, got status: 0x{:x}",
+                    status
+                ));
             }
 
             let exit_code = wexitstatus(status);
@@ -199,7 +202,10 @@ pub fn test_cont_with_signal() -> TestResult {
             // Child should stop at the signal before handler executes
             if !wifstopped(status) {
                 let _ = process::kill(child_pid, libc::SIGKILL);
-                return Err(format!("Expected child to stop at signal, got status: 0x{:x}", status));
+                return Err(format!(
+                    "Expected child to stop at signal, got status: 0x{:x}",
+                    status
+                ));
             }
 
             let sig = wstopsig(status);
@@ -223,7 +229,10 @@ pub fn test_cont_with_signal() -> TestResult {
             }
 
             if !wifexited(status) {
-                return Err(format!("Expected child to exit, got status: 0x{:x}", status));
+                return Err(format!(
+                    "Expected child to exit, got status: 0x{:x}",
+                    status
+                ));
             }
 
             let exit_code = wexitstatus(status);

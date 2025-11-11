@@ -267,7 +267,10 @@ pub fn test_getregset_basic() -> TestResult {
 pub fn run_all_tests() -> (usize, usize) {
     let tests: Vec<(&str, fn() -> TestResult)> = vec![
         ("Register Reading - Basic", test_getregs_basic),
-        ("Register Reading - During Syscall", test_getregs_during_syscall),
+        (
+            "Register Reading - During Syscall",
+            test_getregs_during_syscall,
+        ),
         ("PTRACE_GETREGSET - Basic", test_getregset_basic),
     ];
 
