@@ -197,6 +197,22 @@ pub fn do_exit(exit_code: i32, group_exit: bool) {
                 data.child_exit_event.wake();
             }
         }
+
+        // If this process is being traced, wake the tracer up to initiate two-stage exit handling:
+        // Stage 1 (Tracer): Report exit status, clear tracing state
+        // Stage 2 (Parent): Free resources and reap zombie
+        // Both parent and tracer wake up here, but the parent will skip the zombie child
+        // in its waitpid until the tracer completes Stage 1 and wakes the parent again.
+        // This two-stage exiting is handled in sys_waitpid() in wait.rs.
+        #[cfg(feature = "ptrace")]
+        {
+            if let Ok(tracer_pid) = starry_ptrace::get_tracer(process.pid()) {
+                if let Ok(tracer_data) = get_process_data(tracer_pid) {
+                    tracer_data.child_exit_event.wake();
+                }
+            }
+        }
+
         thr.proc_data.exit_event.wake();
 
         SHM_MANAGER.lock().clear_proc_shm(process.pid());

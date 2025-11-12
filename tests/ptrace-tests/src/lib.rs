@@ -40,6 +40,7 @@ pub mod ptrace {
     pub const PTRACE_DETACH: u32 = 17;
     pub const PTRACE_SYSCALL: u32 = 24;
     pub const PTRACE_SETOPTIONS: u32 = 0x4200;
+    pub const PTRACE_GETEVENTMSG: u32 = 0x4201;
     pub const PTRACE_GETREGSET: u32 = 0x4204;
 
     pub const NT_PRSTATUS: usize = 1;
@@ -51,6 +52,14 @@ pub mod ptrace {
     pub const PTRACE_O_TRACECLONE: u32 = 0x00000008;
     pub const PTRACE_O_TRACEEXEC: u32 = 0x00000010;
     pub const PTRACE_O_TRACEEXIT: u32 = 0x00000040;
+
+    // Ptrace events
+    pub const PTRACE_EVENT_FORK: i32 = 1;
+    pub const PTRACE_EVENT_VFORK: i32 = 2;
+    pub const PTRACE_EVENT_CLONE: i32 = 3;
+    pub const PTRACE_EVENT_EXEC: i32 = 4;
+    pub const PTRACE_EVENT_VFORK_DONE: i32 = 5;
+    pub const PTRACE_EVENT_EXIT: i32 = 6;
 
     pub fn traceme() -> io::Result<()> {
         unsafe {
@@ -159,6 +168,23 @@ pub mod ptrace {
             }
         }
     }
+
+    pub fn geteventmsg(pid: i32) -> io::Result<u64> {
+        unsafe {
+            let mut msg: u64 = 0;
+            if libc::ptrace(
+                PTRACE_GETEVENTMSG as i32,
+                pid,
+                0,
+                &mut msg as *mut _ as *mut libc::c_void,
+            ) == -1
+            {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(msg)
+            }
+        }
+    }
 }
 
 /// Process control utilities
@@ -232,4 +258,24 @@ pub fn wexitstatus(status: i32) -> i32 {
 /// Get stop signal
 pub fn wstopsig(status: i32) -> i32 {
     libc::WSTOPSIG(status)
+}
+
+/// Extract ptrace event code from wait status
+/// Returns the event number (e.g., PTRACE_EVENT_FORK) if this is an event stop
+pub fn get_ptrace_event(status: i32) -> Option<i32> {
+    if wifstopped(status) && wstopsig(status) == libc::SIGTRAP {
+        let event = (status >> 16) & 0xff;
+        if event != 0 {
+            Some(event)
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+/// Check if status indicates a ptrace event stop
+pub fn is_ptrace_event(status: i32, event: i32) -> bool {
+    get_ptrace_event(status) == Some(event)
 }

@@ -223,7 +223,149 @@ pub fn sys_clone(
     let task = spawn_task(new_task);
     add_task_to_table(&task);
 
+    #[cfg(feature = "ptrace")]
+    {
+        // Only when ptrace feature is enabled
+        // We report fork/clone events to the tracer if needed
+        let child_pid = tid;
+        // We exclude THREAD clones from ptrace fork events since they are not new processes
+        if !flags.contains(CloneFlags::THREAD) {
+            notify_ptrace_fork_event(&curr, child_pid, flags, uctx)?;
+        }
+    }
+
     Ok(tid as _)
+}
+
+/// Notify the ptrace tracer, if any, of a fork/vfork/clone event happend to the current tracee.
+/// 
+/// TODO: We may refactor this into a more general ptrace notification system later, not just place it here.
+/// 
+/// What this function does here is:
+/// 1. Check if the parent process is being traced, and if so, whether the ptrace options indicate
+///   that we should generate a fork/vfork/clone event.
+/// 2. If so, set up the child process to be traced by the same tracer (if CLONE_PTRACE is set or event is generated).
+/// 3. Then, stop the child process with a SIGSTOP if it is being traced.
+/// 4. Finally, stop the parent process with the appropriate ptrace event (Fork/Vfork/Clone).
+/// 5. The function returns Ok(()) if everything goes well, or an AxError if any error occurs.
+/// 
+/// Arguments:
+/// - `parent_task`: The parent task that is forking.
+/// - `child_pid`: The PID of the newly created child process.
+/// - `clone_flags`: The clone flags used during the fork.
+/// - `uctx`: The user context of the current parent tracee process
+#[cfg(feature = "ptrace")]
+fn notify_ptrace_fork_event(
+    parent_task: &axtask::AxTaskRef,
+    child_pid: Pid,
+    clone_flags: CloneFlags,
+    uctx: &UserContext,
+) -> AxResult<()> {
+    use starry_ptrace::{PtraceOptions, StopReason, stop_current_and_wait};
+
+    let parent_pid = parent_task.as_thread().proc_data.proc.pid();
+    let parent_state = starry_ptrace::ensure_state_for_pid(parent_pid)?;
+
+    // Step 1&2: Check if parent is being traced and determine if we should generate a ptrace event
+    let parent_info = parent_state.with(|pst| {
+        if !pst.being_traced {
+            return (None, None); // Not traced, nothing to do
+        }
+
+        // Step 2: Determine if we should generate a ptrace event (and stop parent)
+        // Based on clone_flags combined with the ptrace options
+        let event = if clone_flags.contains(CloneFlags::VFORK)
+            && pst.options.contains(PtraceOptions::TRACEVFORK)
+        {
+            Some(StopReason::Vfork(child_pid))
+        } else if clone_flags.contains(CloneFlags::THREAD)
+            && pst.options.contains(PtraceOptions::TRACECLONE)
+        {
+            Some(StopReason::Clone(child_pid))
+        } else if !clone_flags.contains(CloneFlags::VFORK)
+            && !clone_flags.contains(CloneFlags::THREAD)
+            && pst.options.contains(PtraceOptions::TRACEFORK)
+        {
+            // Regular fork (not vfork, not thread)
+            Some(StopReason::Fork(child_pid))
+        } else {
+            None // No ptrace event, but might still inherit tracing via CLONE_PTRACE
+        };
+
+        (pst.tracer, event)
+    });
+
+    let (tracer, event) = parent_info;
+
+    // Step 3: Set up child tracing inheritance FIRST (before stopping parent)
+    // This prevents a race condition where the tracer might try to wait for the child
+    // before it's marked as traced, and this race condition can potential lead to a hang.
+    // 
+    // Child should be traced if:
+    // - Parent stopped with a fork/vfork/clone event (TRACEFORK/VFORK/CLONE options), OR
+    // - CLONE_PTRACE flag is set and parent is being traced
+    let should_trace_child =
+        event.is_some() || (clone_flags.contains(CloneFlags::PTRACE) && tracer.is_some());
+
+    if should_trace_child {
+        debug!(
+            "[PTRACE-DEBUG] About to set up tracing for child pid={} by tracer={:?}",
+            child_pid, tracer
+        );
+        // ensure the new child process has a ptrace state by updating its being_traced and tracer fields
+        let child_state = starry_ptrace::ensure_state_for_pid(child_pid)?;
+        child_state.with_mut(|cst| {
+            cst.being_traced = true;
+            cst.tracer = tracer;
+            debug!(
+                "[PTRACE-DEBUG] Set child pid={} being_traced=true, tracer={:?}",
+                child_pid, tracer
+            );
+        });
+        debug!(
+            "[PTRACE-DEBUG] Child pid={} will be traced by {:?}",
+            child_pid, tracer
+        );
+
+        // Step 4: Child should start stopped (with SIGSTOP) if this was a ptrace event
+        // From ptrace(2): "children...are automatically attached to the same tracer...
+        // and will start with a SIGSTOP"
+        if event.is_some() {
+            use starry_core::task::send_signal_to_process;
+
+            let sig_stop = starry_signal::SignalInfo::new_kernel(Signo::SIGSTOP);
+            if let Err(e) = send_signal_to_process(child_pid, Some(sig_stop)) {
+                debug!(
+                    "[PTRACE-DEBUG] Failed to send SIGSTOP to child pid={}: {:?}",
+                    child_pid, e
+                );
+                // Don't fail the whole operation if we can't send SIGSTOP
+                // The child can still be traced, just not initially stopped
+                // So, nothing to rollback here, no previous modified states would be changed
+            } else {
+                debug!(
+                    "[PTRACE-DEBUG] Child pid={} will start with SIGSTOP",
+                    child_pid
+                );
+            }
+        }
+    }
+
+    // Step 5: Now stop the parent tracee with the fork/vfork/clone event
+    // The child is already set up as traced, so the tracer can immediately wait for it
+    if let Some(stop_reason) = event {
+        debug!(
+            "[PTRACE-DEBUG] Stopping parent pid={} for {:?}",
+            parent_pid, stop_reason
+        );
+        stop_current_and_wait(stop_reason, uctx);
+        debug!(
+            "[PTRACE-DEBUG] Parent pid={} resumed from {:?}",
+            parent_pid, stop_reason
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(target_arch = "x86_64")]

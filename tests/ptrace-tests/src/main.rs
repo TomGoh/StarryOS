@@ -3,6 +3,7 @@ use std::env;
 
 mod test_attach;
 mod test_control;
+mod test_fork_events;
 mod test_memory;
 mod test_regs;
 mod test_syscall;
@@ -74,6 +75,7 @@ fn main() {
         ("memory", test_memory::run_all_tests),
         ("control", test_control::run_all_tests),
         ("attach", test_attach::run_all_tests),
+        ("fork_events", test_fork_events::run_all_tests),
     ];
 
     // Run tests
@@ -116,7 +118,7 @@ fn print_usage(program: &str) {
     println!("\nOptions:");
     println!("  -v, --verbose       Enable verbose output");
     println!(
-        "  --test=<suite>      Run specific test suite (traceme, syscall, regs, memory, control, attach)"
+        "  --test=<suite>      Run specific test suite (traceme, syscall, regs, memory, control, attach, fork_events)"
     );
     println!("  -h, --help          Print this help message");
     println!("\nExamples:");

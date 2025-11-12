@@ -115,10 +115,11 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
     let waiting_on_traced = children.is_empty();
 
     let check_children = || {
-        // ptrace: check trace-stopped processes first (children or traced processes)
+        // ptrace: Priority 1 - Check trace-stopped processes first (children or traced processes)
+        // This ensures tracers receive ptrace events before parents see normal state changes
         #[cfg(feature = "ptrace")]
         {
-            // Check children for ptrace stops
+            // Check children for ptrace stops (syscall-enter-stop, signal-delivery-stop, etc.)
             debug!("[PTRACE-DEBUG] waitpid checking {} children for ptrace stops", children.len());
             for child in &children {
                 if let Some(status) = starry_ptrace::check_ptrace_stop(child.pid()) {
@@ -141,12 +142,76 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
                         }
                         return Ok(Some(target_pid as _));
                     }
+
+                    // Also check if the traced non-child process has exited (zombie state)
+                    // A traced process exiting does not generate a ptrace-stop event; it just becomes a zombie.
+                    // The tracer must handle it first (Stage 1: status reporting), then let the parent
+                    // clean up resources (Stage 2: freeing). If we don't check here, the tracer would
+                    // never be notified of the exit.
+                    use starry_core::task::get_process_data;
+                    if let Ok(proc_data) = get_process_data(target_pid) {
+                        if proc_data.proc.is_zombie() {
+
+                            // Stage 1: Tracer handles the exit notification and clears tracing state
+                            // This allows the real parent to proceed with Stage 2 (resource cleanup)
+                            debug!("[PTRACE-DEBUG] waitpid: traced non-child pid={} is zombie, exit_code=0x{:x}", target_pid, proc_data.proc.exit_code());
+                            // clear the trace status
+                            if let Ok(st) = starry_ptrace::ensure_state_for_pid(target_pid) {
+                                st.with_mut(|s| {
+                                    s.being_traced = false;
+                                    s.tracer = None;
+                                });
+                                debug!("[PTRACE-DEBUG] waitpid: cleared tracing state for pid={}", target_pid);
+                            }
+                            // write back the exit code if not null
+                            if let Some(exit_code) = exit_code.nullable() {
+                                exit_code.vm_write(proc_data.proc.exit_code())?;
+                            }
+
+                            // Stage 2: Decide who frees resources
+                            // - If parent exists: Wake parent to let it reap (free) the zombie
+                            // - If no parent: Tracer must free to prevent resource leak
+                            // WNOWAIT: Don't free, just peek at the status
+                            if !options.contains(WaitOptions::WNOWAIT) {
+                                if let Some(parent) = proc_data.proc.parent() {
+                                    debug!("[PTRACE-DEBUG] waitpid: traced zombie pid={} has parent pid={}, waking parent", target_pid, parent.pid());
+                                    // Wake the parent so it can reap the child
+                                    if let Ok(parent_data) = get_process_data(parent.pid()) {
+                                        parent_data.child_exit_event.wake();
+                                    }
+                                } else {
+                                    // No parent, safe to free
+                                    proc_data.proc.free();
+                                }
+                            }
+
+                            return Ok(Some(target_pid as _));
+                        }
+                    }
                 }
             }
         }
 
-        // Check for zombie children
-        if let Some(child) = children.iter().find(|child| child.is_zombie()) {
+        if let Some(child) = children.iter().find(|child| {
+            if !child.is_zombie() {
+                return false;
+            }
+            // Priority 2 - Check for zombie children (after ptrace events handled above) when ptrace enabled
+            // If child is traced by another process (not us), skip it for now
+            // The tracer must handle it first (Stage 1: status reporting & clearing trace state)
+            // before we can proceed with Stage 2 (resource cleanup)
+            #[cfg(feature = "ptrace")]
+            {
+                let curr_pid = proc.pid();
+                if let Ok(tracer_pid) = starry_ptrace::get_tracer(child.pid()) {
+                    if tracer_pid != curr_pid {
+                        debug!("waitpid: child pid={} is zombie but traced by pid={}, skipping for parent", child.pid(), tracer_pid);
+                        return false;
+                    }
+                }
+            }
+            true
+        }) {
             debug!("waitpid: child pid={} is zombie, exit_code=0x{:x}", child.pid(), child.exit_code());
             if !options.contains(WaitOptions::WNOWAIT) {
                 child.free();
