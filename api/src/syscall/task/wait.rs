@@ -14,6 +14,8 @@ use starry_core::task::AsThread;
 use starry_process::{Pid, Process};
 use starry_vm::{VmMutPtr, VmPtr};
 
+use crate::syscall::task::wait_status::*;
+
 bitflags! {
     #[derive(Debug)]
     struct WaitOptions: u32 {
@@ -60,8 +62,17 @@ impl WaitPid {
 }
 
 pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isize> {
-    let options = WaitOptions::from_bits_truncate(options);
+    let options =
+        WaitOptions::from_bits(options).ok_or(AxError::Other(LinuxError::EINVAL))?;
     info!("sys_waitpid <= pid: {pid:?}, options: {options:?}");
+
+    let unsupported = WaitOptions::WNOTHREAD | WaitOptions::WALL | WaitOptions::WCLONE;
+    let requested_unsupported =
+        WaitOptions::from_bits_truncate(options.bits() & unsupported.bits());
+    if !requested_unsupported.is_empty() {
+        warn!("waitpid: unsupported options {:?}", requested_unsupported);
+        return Err(AxError::Unsupported);
+    }
 
     let curr = current();
     let proc_data = &curr.as_thread().proc_data;
@@ -88,20 +99,66 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
         return Err(AxError::Other(LinuxError::ECHILD));
     }
 
-    let check_children = || {
+    let check_children = || -> AxResult<Option<isize>> {
+        // First, check for any zombie children
         if let Some(child) = children.iter().find(|child| child.is_zombie()) {
+            // Get zombie termination info before freeing
+            let zombie_info = child
+                .zombie_info()
+                .expect("zombie child must have zombie info");
+
             if !options.contains(WaitOptions::WNOWAIT) {
                 child.free();
             }
-            if let Some(exit_code) = exit_code.nullable() {
-                exit_code.vm_write(child.exit_code())?;
+
+            // Encode status based on how the process terminated
+            let wait_status = match zombie_info {
+                starry_process::ZombieInfo::Exited(code) => WaitStatus::exited(code),
+                starry_process::ZombieInfo::Signaled {
+                    signal,
+                    core_dumped,
+                } => WaitStatus::signaled(signal, core_dumped),
+            };
+
+            if let Some(exit_code_ptr) = exit_code.nullable() {
+                let _ = exit_code_ptr.vm_write(wait_status.as_raw());
             }
-            Ok(Some(child.pid() as _))
-        } else if options.contains(WaitOptions::WNOHANG) {
-            Ok(Some(0))
-        } else {
-            Ok(None)
+            return Ok(Some(child.pid() as isize));
         }
+
+        // When the WUNTRACED option is specified, also check for stopped children.
+        // TODO: extend this to cover ptrace stop reporting once ptrace lands.
+        if options.contains(WaitOptions::WUNTRACED) {
+            if let Some(stopped_child) = children.iter().find(|child| child.is_stopped()) {
+                if let Some(stopping_signal) = stopped_child.stop_signal() {
+                    let wait_status = WaitStatus::stopped(stopping_signal);
+                    if let Some(exit_code_ptr) = exit_code.nullable() {
+                        let _ = exit_code_ptr.vm_write(wait_status.as_raw());
+                    }
+                    return Ok(Some(stopped_child.pid() as isize));
+                }
+            }
+        }
+
+        // When the WCONTINUED option is specified, check for continued children
+        if options.contains(WaitOptions::WCONTINUED) {
+            if let Some(continued_child) = children.iter().find(|child| child.is_continued()) {
+                let wait_status = WaitStatus::continued();
+                if let Some(exit_code_ptr) = exit_code.nullable() {
+                    let _ = exit_code_ptr.vm_write(wait_status.as_raw());
+                }
+                // Acknowledge that parent has been notified
+                continued_child.ack_continued();
+                return Ok(Some(continued_child.pid() as isize));
+            }
+        }
+
+        // When WNOHANG is specified, return immediately if no children are ready
+        if options.contains(WaitOptions::WNOHANG) {
+            return Ok(Some(0));
+        }
+
+        Ok(None)
     };
 
     block_on(interruptible(poll_fn(|cx| {

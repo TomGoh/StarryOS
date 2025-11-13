@@ -6,7 +6,7 @@ use axtask::current;
 use starry_core::task::{AsThread, Thread};
 use starry_signal::{SignalOSAction, SignalSet};
 
-use crate::task::do_exit;
+use crate::task::{do_continue, do_exit_signal, do_stop};
 
 pub fn check_signals(
     thr: &Thread,
@@ -20,18 +20,17 @@ pub fn check_signals(
     let signo = sig.signo();
     match os_action {
         SignalOSAction::Terminate => {
-            do_exit(signo as i32, true);
+            do_exit_signal(signo as i32, false, true);
         }
         SignalOSAction::CoreDump => {
-            // TODO: implement core dump
-            do_exit(128 + signo as i32, true);
+            // TODO: implement actual core dump
+            do_exit_signal(signo as i32, true, true);
         }
         SignalOSAction::Stop => {
-            // TODO: implement stop
-            do_exit(1, true);
+            do_stop(signo as i32);
         }
         SignalOSAction::Continue => {
-            // TODO: implement continue
+            do_continue();
         }
         SignalOSAction::Handler => {
             // do nothing
