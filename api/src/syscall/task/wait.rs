@@ -70,7 +70,7 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
     let requested_unsupported =
         WaitOptions::from_bits_truncate(options.bits() & unsupported.bits());
     if !requested_unsupported.is_empty() {
-        warn!("waitpid: unsupported options {:?}", requested_unsupported);
+        warn!("waitpid: unsupported options {requested_unsupported:?}");
         return Err(AxError::Unsupported);
     }
 
@@ -128,29 +128,28 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
 
         // When the WUNTRACED option is specified, also check for stopped children.
         // TODO: extend this to cover ptrace stop reporting once ptrace lands.
-        if options.contains(WaitOptions::WUNTRACED) {
-            if let Some(stopped_child) = children.iter().find(|child| child.is_stopped()) {
-                if let Some(stopping_signal) = stopped_child.stop_signal() {
-                    let wait_status = WaitStatus::stopped(stopping_signal);
-                    if let Some(exit_code_ptr) = exit_code.nullable() {
-                        let _ = exit_code_ptr.vm_write(wait_status.as_raw());
-                    }
-                    return Ok(Some(stopped_child.pid() as isize));
-                }
+        if options.contains(WaitOptions::WUNTRACED)
+            && let Some(stopped_child) = children.iter().find(|child| child.is_stopped())
+            && let Some(stopping_signal) = stopped_child.stop_signal()
+        {
+            let wait_status = WaitStatus::stopped(stopping_signal);
+            if let Some(exit_code_ptr) = exit_code.nullable() {
+                let _ = exit_code_ptr.vm_write(wait_status.as_raw());
             }
+            return Ok(Some(stopped_child.pid() as isize));
         }
 
         // When the WCONTINUED option is specified, check for continued children
-        if options.contains(WaitOptions::WCONTINUED) {
-            if let Some(continued_child) = children.iter().find(|child| child.is_continued()) {
-                let wait_status = WaitStatus::continued();
-                if let Some(exit_code_ptr) = exit_code.nullable() {
-                    let _ = exit_code_ptr.vm_write(wait_status.as_raw());
-                }
-                // Acknowledge that parent has been notified
-                continued_child.ack_continued();
-                return Ok(Some(continued_child.pid() as isize));
+        if options.contains(WaitOptions::WCONTINUED)
+            && let Some(continued_child) = children.iter().find(|child| child.is_continued())
+        {
+            let wait_status = WaitStatus::continued();
+            if let Some(exit_code_ptr) = exit_code.nullable() {
+                let _ = exit_code_ptr.vm_write(wait_status.as_raw());
             }
+            // Acknowledge that parent has been notified
+            continued_child.ack_continued();
+            return Ok(Some(continued_child.pid() as isize));
         }
 
         // When WNOHANG is specified, return immediately if no children are ready

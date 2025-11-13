@@ -320,10 +320,10 @@ pub fn do_stop(stop_signal: i32) {
     );
     curr_process.stop_by_signal(stop_signal);
 
-    if let Some(parent) = curr_process.parent() {
-        if let Ok(data) = get_process_data(parent.pid()) {
-            data.child_exit_event.wake();
-        }
+    if let Some(parent) = curr_process.parent()
+        && let Ok(data) = get_process_data(parent.pid())
+    {
+        data.child_exit_event.wake();
     }
 }
 
@@ -339,9 +339,9 @@ pub fn do_continue() {
     curr_process.continue_from_stop();
     curr_thread.proc_data.child_exit_event.wake();
 
-    if let Some(parent) = curr_process.parent() {
-        if let Ok(data) = get_process_data(parent.pid()) {
-            data.child_exit_event.wake();
-        }
+    if let Some(parent) = curr_process.parent()
+        && let Ok(data) = get_process_data(parent.pid())
+    {
+        data.child_exit_event.wake();
     }
 }
