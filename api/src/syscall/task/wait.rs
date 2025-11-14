@@ -100,7 +100,36 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
     }
 
     let check_children = || -> AxResult<Option<isize>> {
-        // First, check for any zombie children
+        // When the WCONTINUED option is specified, check for continued children first.
+        // This must come before zombie check because a process can be in Continued state
+        // briefly before becoming a zombie (e.g., stopped process receives SIGCONT then exits).
+        if options.contains(WaitOptions::WCONTINUED)
+            && let Some(continued_child) = children.iter().find(|child| child.is_continued())
+        {
+            let wait_status = WaitStatus::continued();
+            if let Some(exit_code_ptr) = exit_code.nullable() {
+                let _ = exit_code_ptr.vm_write(wait_status.as_raw());
+            }
+            // Acknowledge that parent has been notified
+            continued_child.ack_continued();
+            return Ok(Some(continued_child.pid() as isize));
+        }
+
+        // When the WUNTRACED option is specified, also check for stopped children.
+        // This should come before zombie check to catch stops before termination.
+        // TODO: extend this to cover ptrace stop reporting once ptrace lands.
+        if options.contains(WaitOptions::WUNTRACED)
+            && let Some(stopped_child) = children.iter().find(|child| child.is_stopped())
+            && let Some(stopping_signal) = stopped_child.stop_signal()
+        {
+            let wait_status = WaitStatus::stopped(stopping_signal);
+            if let Some(exit_code_ptr) = exit_code.nullable() {
+                let _ = exit_code_ptr.vm_write(wait_status.as_raw());
+            }
+            return Ok(Some(stopped_child.pid() as isize));
+        }
+
+        // Check for any zombie children
         if let Some(child) = children.iter().find(|child| child.is_zombie()) {
             // Get zombie termination info before freeing
             let zombie_info = child
@@ -124,32 +153,6 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
                 let _ = exit_code_ptr.vm_write(wait_status.as_raw());
             }
             return Ok(Some(child.pid() as isize));
-        }
-
-        // When the WUNTRACED option is specified, also check for stopped children.
-        // TODO: extend this to cover ptrace stop reporting once ptrace lands.
-        if options.contains(WaitOptions::WUNTRACED)
-            && let Some(stopped_child) = children.iter().find(|child| child.is_stopped())
-            && let Some(stopping_signal) = stopped_child.stop_signal()
-        {
-            let wait_status = WaitStatus::stopped(stopping_signal);
-            if let Some(exit_code_ptr) = exit_code.nullable() {
-                let _ = exit_code_ptr.vm_write(wait_status.as_raw());
-            }
-            return Ok(Some(stopped_child.pid() as isize));
-        }
-
-        // When the WCONTINUED option is specified, check for continued children
-        if options.contains(WaitOptions::WCONTINUED)
-            && let Some(continued_child) = children.iter().find(|child| child.is_continued())
-        {
-            let wait_status = WaitStatus::continued();
-            if let Some(exit_code_ptr) = exit_code.nullable() {
-                let _ = exit_code_ptr.vm_write(wait_status.as_raw());
-            }
-            // Acknowledge that parent has been notified
-            continued_child.ack_continued();
-            return Ok(Some(continued_child.pid() as isize));
         }
 
         // When WNOHANG is specified, return immediately if no children are ready
