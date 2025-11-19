@@ -26,9 +26,7 @@ pub fn test_fork_event_basic() -> TestResult {
                     // Grandchild - exit immediately
                     libc::exit(0);
                 } else if child_pid > 0 {
-                    // Child - wait for grandchild
-                    let mut status = 0;
-                    libc::waitpid(child_pid, &mut status, 0);
+                    // Child skips waiting so the tracer handles the grandchild lifecycle
                 }
             }
 
@@ -198,9 +196,7 @@ pub fn test_fork_without_option() -> TestResult {
                     // Grandchild - exit immediately
                     libc::exit(0);
                 } else if child_pid > 0 {
-                    // Child - wait for grandchild
-                    let mut status = 0;
-                    libc::waitpid(child_pid, &mut status, 0);
+                    // Child does not wait; tracer suppresses SIGCHLD so waiting can hang
                 }
             }
 
@@ -338,69 +334,368 @@ pub fn test_clone_event() -> TestResult {
                 return Err(format!("PTRACE_CONT failed: {}", e));
             }
 
-            // Wait for either PTRACE_EVENT_CLONE or child exit
-            let mut got_clone_event = false;
-            let mut iterations = 0;
-            let max_iterations = 20;
+            // Wait specifically for child_pid to generate clone event
+            // This avoids confusion with zombie children from previous tests
+            if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("waitpid (clone event) failed: {}", e));
+            }
 
-            loop {
-                iterations += 1;
-                if iterations > max_iterations {
+            if !is_ptrace_event(status, ptrace::PTRACE_EVENT_CLONE) {
+                // Child might have exited or stopped for another reason
+                if wifexited(status) || wifsignaled(status) {
                     let _ = process::kill(child_pid, libc::SIGKILL);
-                    return Err(format!("Test timeout after {} iterations", max_iterations));
+                    return Err(format!(
+                        "Child exited before clone event, status: 0x{:x}",
+                        status
+                    ));
                 }
-
-                // Use WNOHANG to avoid blocking forever
-                match process::waitpid(-1, &mut status, libc::WNOHANG) {
-                    Err(e) => {
+                // Not clone event, might be a signal stop - continue and try again
+                if wifstopped(status) {
+                    let _ = ptrace::cont(child_pid, 0);
+                    if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
                         let _ = process::kill(child_pid, libc::SIGKILL);
-                        return Err(format!("waitpid failed: {}", e));
+                        return Err(format!("waitpid (retry clone event) failed: {}", e));
                     }
-                    Ok(0) => {
-                        // No child state changed, sleep briefly
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                        continue;
-                    }
-                    Ok(pid) => {
-                        if wifexited(status) {
-                            if pid == child_pid {
-                                break;
-                            }
-                            // Some other process exited, continue
-                            continue;
-                        }
-
-                        if wifstopped(status) {
-                            if is_ptrace_event(status, ptrace::PTRACE_EVENT_CLONE) {
-                                got_clone_event = true;
-                                print_success("PTRACE_EVENT_CLONE received");
-
-                                // Get the new thread ID via PTRACE_GETEVENTMSG
-                                match ptrace::geteventmsg(pid) {
-                                    Ok(msg) => {
-                                        print_success(&format!("Thread ID from GETEVENTMSG: {}", msg as i32));
-                                    }
-                                    Err(e) => {
-                                        let _ = process::kill(child_pid, libc::SIGKILL);
-                                        return Err(format!("PTRACE_GETEVENTMSG failed: {}", e));
-                                    }
-                                }
-                            }
-
-                            // Continue on any stop
-                            if let Err(_) = ptrace::cont(pid, 0) {
-                                // Ignore errors - process may have exited
-                                continue;
-                            }
-                        }
+                    if !is_ptrace_event(status, ptrace::PTRACE_EVENT_CLONE) {
+                        let _ = process::kill(child_pid, libc::SIGKILL);
+                        return Err(format!(
+                            "Expected PTRACE_EVENT_CLONE, got status: 0x{:x}",
+                            status
+                        ));
                     }
                 }
             }
 
-            if !got_clone_event {
-                print_skip("PTRACE_EVENT_CLONE not detected (may not be implemented or threads not traced separately)");
+            print_success("PTRACE_EVENT_CLONE received");
+
+            let new_tid = match ptrace::geteventmsg(child_pid) {
+                Ok(msg) => msg as i32,
+                Err(e) => {
+                    let _ = process::kill(child_pid, libc::SIGKILL);
+                    return Err(format!("PTRACE_GETEVENTMSG failed: {}", e));
+                }
+            };
+            print_success(&format!("Thread ID from GETEVENTMSG: {}", new_tid));
+
+            // Wait for new thread to stop with SIGSTOP
+            let mut thread_status = 0;
+            match process::waitpid(new_tid, &mut thread_status, 0) {
+                Ok(_) => {
+                    if !wifstopped(thread_status) || wstopsig(thread_status) != libc::SIGSTOP {
+                        let _ = process::kill(child_pid, libc::SIGKILL);
+                        let _ = process::kill(new_tid, libc::SIGKILL);
+                        return Err(format!(
+                            "New thread {} did not stop with SIGSTOP, status: 0x{:x}",
+                            new_tid, thread_status
+                        ));
+                    }
+                    print_success(&format!(
+                        "New thread {} confirmed stopped with SIGSTOP",
+                        new_tid
+                    ));
+                    let _ = ptrace::cont(new_tid, 0);
+                }
+                Err(e) => {
+                    let _ = process::kill(child_pid, libc::SIGKILL);
+                    return Err(format!("Failed to wait for new thread {}: {}", new_tid, e));
+                }
             }
 
+            // Continue parent and wait for exit
+            let _ = ptrace::cont(child_pid, 0);
+            loop {
+                if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                    return Err(format!("waitpid (child exit) failed: {}", e));
+                }
+                if wifexited(status) || wifsignaled(status) {
+                    print_success("Child exited successfully");
+                    break;
+                }
+                // Handle any intermediate stops
+                if wifstopped(status) {
+                    let _ = ptrace::cont(child_pid, 0);
+                }
+            }
+
+            Ok(())
+        }
+    }
+}
+
+/// Test PTRACE_EVENT_EXEC - exec tracing
+pub fn test_exec_event() -> TestResult {
+    print_test_header("PTRACE_EVENT_EXEC - Exec Tracing");
+
+    match process::fork() {
+        Err(e) => return Err(format!("fork failed: {}", e)),
+        Ok(0) => {
+            if let Err(e) = ptrace::traceme() {
+                eprintln!("Child: PTRACE_TRACEME failed: {}", e);
+                process::exit(1);
+            }
+            if let Err(e) = process::raise(libc::SIGSTOP) {
+                eprintln!("Child: raise(SIGSTOP) failed: {}", e);
+                process::exit(1);
+            }
+
+            let path = std::ffi::CString::new("/bin/true").unwrap();
+            let arg0 = std::ffi::CString::new("true").unwrap();
+            unsafe {
+                libc::execl(path.as_ptr(), arg0.as_ptr(), std::ptr::null::<libc::c_char>());
+            }
+            process::exit(1);
+        }
+        Ok(child_pid) => {
+            let mut status = 0;
+            if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("waitpid (initial) failed: {}", e));
+            }
+
+            if let Err(e) = ptrace::setoptions(child_pid, ptrace::PTRACE_O_TRACEEXEC) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_SETOPTIONS failed: {}", e));
+            }
+            print_success("PTRACE_O_TRACEEXEC option set");
+
+            if let Err(e) = ptrace::cont(child_pid, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_CONT failed: {}", e));
+            }
+
+            if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("waitpid (exec event) failed: {}", e));
+            }
+
+            if !is_ptrace_event(status, ptrace::PTRACE_EVENT_EXEC) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!(
+                    "Expected PTRACE_EVENT_EXEC, got status: 0x{:x}",
+                    status
+                ));
+            }
+            print_success("PTRACE_EVENT_EXEC received");
+
+            if let Err(e) = ptrace::cont(child_pid, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_CONT (post exec) failed: {}", e));
+            }
+
+            if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                return Err(format!("waitpid (child exit) failed: {}", e));
+            }
+
+            if !wifexited(status) {
+                return Err(format!("Child did not exit normally, status: 0x{:x}", status));
+            }
+
+            print_success("Child exited after exec");
+            Ok(())
+        }
+    }
+}
+
+/// Test PTRACE_EVENT_EXIT - exit tracing
+pub fn test_exit_event() -> TestResult {
+    print_test_header("PTRACE_EVENT_EXIT - Exit Tracing");
+
+    match process::fork() {
+        Err(e) => return Err(format!("fork failed: {}", e)),
+        Ok(0) => {
+            if let Err(e) = ptrace::traceme() {
+                eprintln!("Child: PTRACE_TRACEME failed: {}", e);
+                process::exit(1);
+            }
+            if let Err(e) = process::raise(libc::SIGSTOP) {
+                eprintln!("Child: raise(SIGSTOP) failed: {}", e);
+                process::exit(1);
+            }
+            process::exit(42);
+        }
+        Ok(child_pid) => {
+            let mut status = 0;
+            if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("waitpid (initial) failed: {}", e));
+            }
+
+            if let Err(e) = ptrace::setoptions(child_pid, ptrace::PTRACE_O_TRACEEXIT) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_SETOPTIONS failed: {}", e));
+            }
+            print_success("PTRACE_O_TRACEEXIT option set");
+
+            if let Err(e) = ptrace::cont(child_pid, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_CONT failed: {}", e));
+            }
+
+            if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("waitpid (exit event) failed: {}", e));
+            }
+
+            if !is_ptrace_event(status, ptrace::PTRACE_EVENT_EXIT) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!(
+                    "Expected PTRACE_EVENT_EXIT, got status: 0x{:x}",
+                    status
+                ));
+            }
+            print_success("PTRACE_EVENT_EXIT received");
+
+            let event_msg = match ptrace::geteventmsg(child_pid) {
+                Ok(msg) => msg as i32,
+                Err(e) => {
+                    let _ = process::kill(child_pid, libc::SIGKILL);
+                    return Err(format!("PTRACE_GETEVENTMSG failed: {}", e));
+                }
+            };
+            print_success(&format!("Exit status from GETEVENTMSG: {}", event_msg));
+
+            if let Err(e) = ptrace::cont(child_pid, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_CONT (post exit event) failed: {}", e));
+            }
+
+            if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                return Err(format!("waitpid (final) failed: {}", e));
+            }
+
+            if !wifexited(status) || wexitstatus(status) != 42 {
+                return Err(format!("Child exited with unexpected status: 0x{:x}", status));
+            }
+
+            print_success("Child exited with expected status 42");
+            Ok(())
+        }
+    }
+}
+
+/// Test PTRACE_EVENT_VFORK and VFORK_DONE
+pub fn test_vfork_event() -> TestResult {
+    print_test_header("PTRACE_EVENT_VFORK - Vfork Tracing");
+
+    match process::fork() {
+        Err(e) => return Err(format!("fork failed: {}", e)),
+        Ok(0) => {
+            if let Err(e) = ptrace::traceme() {
+                eprintln!("Child: PTRACE_TRACEME failed: {}", e);
+                process::exit(1);
+            }
+            if let Err(e) = process::raise(libc::SIGSTOP) {
+                eprintln!("Child: raise(SIGSTOP) failed: {}", e);
+                process::exit(1);
+            }
+
+            #[allow(deprecated)]
+            unsafe {
+                let pid = libc::vfork();
+                if pid == 0 {
+                    libc::_exit(0);
+                }
+            }
+
+            process::exit(0);
+        }
+        Ok(child_pid) => {
+            let mut status = 0;
+            if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("waitpid (initial) failed: {}", e));
+            }
+
+            if let Err(e) =
+                ptrace::setoptions(child_pid, ptrace::PTRACE_O_TRACEVFORK | ptrace::PTRACE_O_TRACEVFORKDONE)
+            {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_SETOPTIONS failed: {}", e));
+            }
+            print_success("PTRACE_O_TRACEVFORK and PTRACE_O_TRACEVFORKDONE options set");
+
+            if let Err(e) = ptrace::cont(child_pid, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_CONT failed: {}", e));
+            }
+
+            if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("waitpid (vfork event) failed: {}", e));
+            }
+
+            if !is_ptrace_event(status, ptrace::PTRACE_EVENT_VFORK) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!(
+                    "Expected PTRACE_EVENT_VFORK, got status: 0x{:x}",
+                    status
+                ));
+            }
+            print_success("PTRACE_EVENT_VFORK received");
+
+            let grandchild_pid = match ptrace::geteventmsg(child_pid) {
+                Ok(msg) => msg as i32,
+                Err(e) => {
+                    let _ = process::kill(child_pid, libc::SIGKILL);
+                    return Err(format!("PTRACE_GETEVENTMSG failed: {}", e));
+                }
+            };
+            print_success(&format!("Vfork child PID: {}", grandchild_pid));
+
+            let mut gc_status = 0;
+            if let Err(e) = process::waitpid(grandchild_pid, &mut gc_status, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                let _ = process::kill(grandchild_pid, libc::SIGKILL);
+                return Err(format!("waitpid (vfork child) failed: {}", e));
+            }
+
+            if !wifstopped(gc_status) || wstopsig(gc_status) != libc::SIGSTOP {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                let _ = process::kill(grandchild_pid, libc::SIGKILL);
+                return Err(format!(
+                    "Expected vfork child {} to stop with SIGSTOP, got status: 0x{:x}",
+                    grandchild_pid, gc_status
+                ));
+            }
+            print_success("Vfork child stopped with SIGSTOP");
+
+            if let Err(e) = ptrace::cont(grandchild_pid, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                let _ = process::kill(grandchild_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_CONT (vfork child) failed: {}", e));
+            }
+            print_success("Vfork child resumed");
+
+            if let Err(e) = ptrace::cont(child_pid, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_CONT (post VFORK) failed: {}", e));
+            }
+
+            if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("waitpid (vfork done) failed: {}", e));
+            }
+
+            if !is_ptrace_event(status, ptrace::PTRACE_EVENT_VFORK_DONE) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!(
+                    "Expected PTRACE_EVENT_VFORK_DONE, got status: 0x{:x}",
+                    status
+                ));
+            }
+            print_success("PTRACE_EVENT_VFORK_DONE received");
+
+            if let Err(e) = ptrace::cont(child_pid, 0) {
+                let _ = process::kill(child_pid, libc::SIGKILL);
+                return Err(format!("PTRACE_CONT (post VFORK_DONE) failed: {}", e));
+            }
+
+            if let Err(e) = process::waitpid(child_pid, &mut status, 0) {
+                return Err(format!("waitpid (final) failed: {}", e));
+            }
+
+            let _ = process::waitpid(grandchild_pid, &mut gc_status, 0);
             Ok(())
         }
     }
@@ -411,6 +706,9 @@ pub fn run_all_tests() -> (usize, usize) {
         ("PTRACE_EVENT_FORK - Basic", test_fork_event_basic),
         ("PTRACE_EVENT_FORK - Without Option", test_fork_without_option),
         ("PTRACE_EVENT_CLONE - Basic", test_clone_event),
+        ("PTRACE_EVENT_EXEC - Basic", test_exec_event),
+        ("PTRACE_EVENT_EXIT - Basic", test_exit_event),
+        ("PTRACE_EVENT_VFORK - Basic", test_vfork_event),
     ];
 
     let mut passed = 0;

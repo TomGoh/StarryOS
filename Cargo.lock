@@ -2739,7 +2739,3 @@ dependencies = [
  "quote",
  "syn 2.0.106",
 ]
-
-[[patch.unused]]
-name = "starry-process"
-version = "0.2.0"
