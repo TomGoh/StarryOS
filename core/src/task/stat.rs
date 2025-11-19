@@ -84,8 +84,10 @@ impl TaskStat {
         drop(group);  // Release group reference early
 
         // Check state after releasing group locks
-        let state = if proc.is_stopped() {
-            'T'
+        let state = if proc.is_ptrace_stopped() {
+            't'  // Traced (ptrace-stop)
+        } else if proc.is_signal_stopped() {
+            'T'  // Stopped (signal-stop)
         } else {
             match task.state() {
                 TaskState::Running | TaskState::Ready => 'R',

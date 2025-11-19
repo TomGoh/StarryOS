@@ -2176,6 +2176,7 @@ dependencies = [
  "spin 0.10.0",
  "starry-core",
  "starry-process",
+ "starry-ptrace",
  "starry-signal",
  "starry-vm",
  "syscalls",
@@ -2236,6 +2237,25 @@ dependencies = [
  "kspin",
  "lazyinit",
  "weak-map",
+]
+
+[[package]]
+name = "starry-ptrace"
+version = "0.1.0"
+dependencies = [
+ "axerrno",
+ "axhal",
+ "axlog",
+ "axmm",
+ "axtask",
+ "bitflags 2.10.0",
+ "linux-raw-sys",
+ "memory_addr",
+ "spin 0.10.0",
+ "starry-core",
+ "starry-process",
+ "starry-signal",
+ "starry-vm",
 ]
 
 [[package]]

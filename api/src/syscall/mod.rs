@@ -629,8 +629,13 @@ pub fn handle_syscall(uctx: &mut UserContext) {
 
     #[cfg(feature = "ptrace")]
     {
-        if let Some(hook) = starry_core::hooks::get_syscall_hook() {
-            hook.on_syscall_exit(uctx);
-        }   
+        // Syscalls that do not return (e.g., exit, execve) should not trigger a syscall-exit stop.
+        // The ptrace event for execve and exit is handled separately.
+        let no_return = matches!(sysno, Sysno::exit | Sysno::exit_group | Sysno::execve);
+        if !no_return {
+            if let Some(hook) = starry_core::hooks::get_syscall_hook() {
+                hook.on_syscall_exit(uctx);
+            }
+        }
     }
 }
