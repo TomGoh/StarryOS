@@ -19,13 +19,46 @@ pub fn check_signals(
     };
 
     let signo = sig.signo();
+
+    // Stage 0: Ptrace signal-delivery-stop integration
+    // If the process is being traced, stop and let the tracer decide what to do with the signal
+    #[cfg(feature = "ptrace")]
+    {
+        if starry_ptrace::is_being_traced() {
+            let action = starry_ptrace::signal_stop(signo as i32, uctx);
+
+            match action {
+                starry_ptrace::SignalAction::Suppress => {
+                    // Tracer wants to suppress the signal - don't execute the signal handler
+                    return true;
+                }
+                starry_ptrace::SignalAction::DeliverOriginal => {
+                    // Tracer wants to deliver the original signal - fall through to match os_action
+                }
+                starry_ptrace::SignalAction::DeliverModified(new_sig) => {
+                    // Tracer changed the signal - re-inject the new signal and return
+                    // This will be processed on the next signal check
+                    if let Some(new_signo) = starry_signal::Signo::from_repr(new_sig as u8) {
+                        let sig_info = starry_signal::SignalInfo::new_kernel(new_signo);
+                        let _ = starry_core::task::send_signal_to_process(
+                            thr.proc_data.proc.pid(),
+                            Some(sig_info),
+                        );
+                    }
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Original signal handling logic
     match os_action {
         SignalOSAction::Terminate => {
             info!("{:?} terminated by signal {:?}", thr.proc_data.proc, signo);
             do_exit(128 + signo as i32, true, Some(signo), false);
         }
         SignalOSAction::CoreDump => {
-            // TODO: implement core dump, 
+            // TODO: implement core dump,
             // now the core_dumped is set to true as a indication without actual core dump
             info!("{:?} core dumped by signal {:?}", thr.proc_data.proc, signo);
             do_exit(128 + signo as i32, true, Some(signo), true);

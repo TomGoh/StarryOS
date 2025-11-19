@@ -348,24 +348,36 @@ pub fn do_stop(stop_signal: i32) {
 ///
 /// It also wakes up any threads of the process that were blocked in the main
 /// task loop, allowing them to resume execution.
-/// 
+///
 /// Notice that the state of the process after being continued are not guranteed.
 /// There is no auto-restart mechanism after a syscall has been interrupted.
+///
+/// **Important**: SIGCONT only resumes signal-stops, NOT ptrace-stops.
+/// Ptrace-stops must be resumed by the tracer via PTRACE_CONT/SYSCALL/DETACH.
 pub fn do_continue() {
     let curr = current();
     let curr_thread = curr.as_thread();
     let curr_process = &curr_thread.proc_data.proc;
 
-    info!(
-        "Process {} continuing from stopped state",
-        curr_process.pid()
-    );
-    curr_process.continue_from_stop();
-    curr_thread.proc_data.child_exit_event.wake();
+    // SIGCONT only resumes signal-stops, NOT ptrace-stops
+    if curr_process.is_signal_stopped() {
+        info!(
+            "Process {} continuing from signal-stopped state",
+            curr_process.pid()
+        );
+        curr_process.continue_from_stop();
+        curr_thread.proc_data.child_exit_event.wake();
 
-    if let Some(parent) = curr_process.parent()
-        && let Ok(data) = get_process_data(parent.pid())
-    {
-        data.child_exit_event.wake();
+        if let Some(parent) = curr_process.parent()
+            && let Ok(data) = get_process_data(parent.pid())
+        {
+            data.child_exit_event.wake();
+        }
+    } else if curr_process.is_ptrace_stopped() {
+        // Ignore SIGCONT if process is in ptrace-stop - only tracer can resume
+        info!(
+            "Process {} ignoring SIGCONT while in ptrace-stop (must be resumed by tracer)",
+            curr_process.pid()
+        );
     }
 }

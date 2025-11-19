@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["api", "core"]
-exclude = ["arceos"]
+exclude = ["arceos", "tests/ptrace-tests"]
 
 [workspace.package]
 version = "0.1.0"
@@ -78,6 +78,7 @@ starry-vm = "0.2"
 
 starry-core = { path = "./core" }
 starry-api = { path = "./api" }
+starry-ptrace = { package = "starry-ptrace", path = "./local_crates/starry-ptrace" }
 
 [package]
 name = "starry"
@@ -90,6 +91,7 @@ repository.workspace = true
 
 [features]
 default = []
+ptrace = ["starry-core/ptrace", "starry-api/ptrace"]
 qemu = [
     "axfeat/driver-virtio-blk",
     "axfeat/driver-virtio-net",

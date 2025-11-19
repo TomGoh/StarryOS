@@ -226,6 +226,10 @@ pub struct ProcessData {
 
     /// The default mask for file permissions.
     umask: AtomicU32,
+
+    /// Optional extension state for ptrace. See [`starry_ptrace::state::PtraceState`].
+    #[cfg(feature = "ptrace")]
+    pub ptrace_state: axsync::Mutex<Option<alloc::boxed::Box<dyn core::any::Any + Send + Sync>>>,
 }
 
 impl ProcessData {
@@ -261,6 +265,9 @@ impl ProcessData {
             futex_table: Arc::new(FutexTable::new()),
 
             umask: AtomicU32::new(0o022),
+
+            #[cfg(feature = "ptrace")]
+            ptrace_state: axsync::Mutex::new(None),
         })
     }
 
@@ -427,6 +434,13 @@ pub fn get_process_data(pid: Pid) -> AxResult<Arc<ProcessData>> {
     PROCESS_TABLE.read().get(&pid).ok_or(AxError::NoSuchProcess)
 }
 
+/// Finds the Process handle for the given PID.
+/// This is a convenience wrapper around get_process_data() for ptrace operations.
+pub fn get_process_by_pid(pid: Pid) -> AxResult<Arc<Process>> {
+    let proc_data = get_process_data(pid)?;
+    Ok(proc_data.proc.clone())
+}
+
 /// Finds the process group with the given PGID.
 pub fn get_process_group(pgid: Pid) -> AxResult<Arc<ProcessGroup>> {
     PROCESS_GROUP_TABLE
@@ -499,10 +513,10 @@ pub fn send_signal_to_process(pid: Pid, sig: Option<SignalInfo>) -> AxResult<()>
         let signo = sig.signo();
         info!("Send signal {signo:?} to process {pid}");
 
-        // Handle SIGCONT specially: if target process is stopped, continue it
-        // immediately
-        if signo == Signo::SIGCONT && proc_data.proc.is_stopped() {
-            info!("Process {pid} is stopped, continuing immediately");
+        // Handle SIGCONT specially: if target process is signal-stopped, continue it
+        // immediately. SIGCONT does NOT resume ptrace-stops.
+        if signo == Signo::SIGCONT && proc_data.proc.is_signal_stopped() {
+            info!("Process {pid} is signal-stopped, continuing immediately");
             proc_data.proc.continue_from_stop();
             proc_data.child_exit_event.wake();
 
@@ -514,14 +528,19 @@ pub fn send_signal_to_process(pid: Pid, sig: Option<SignalInfo>) -> AxResult<()>
             }
         }
 
-        // Handle SIGKILL specially: if target process is stopped, continue it so it can
-        // be killed
+        // Handle SIGKILL specially: if target process is stopped, resume it so it can
+        // be killed. Must distinguish between ptrace-stops and signal-stops.
         if signo == Signo::SIGKILL && proc_data.proc.is_stopped() {
-            info!("Process {pid} is stopped, continuing to allow SIGKILL");
-            proc_data.proc.continue_from_stop();
-            // Don't transition to Continued state - go directly to Running
-            // so the process can be killed immediately
-            proc_data.proc.ack_continued();
+            if proc_data.proc.is_ptrace_stopped() {
+                info!("Process {pid} is ptrace-stopped, resuming to allow SIGKILL");
+                proc_data.proc.resume_from_ptrace_stop();
+            } else {
+                info!("Process {pid} is signal-stopped, continuing to allow SIGKILL");
+                proc_data.proc.continue_from_stop();
+                // Don't transition to Continued state - go directly to Running
+                // so the process can be killed immediately
+                proc_data.proc.ack_continued();
+            }
             proc_data.child_exit_event.wake();
         }
 
