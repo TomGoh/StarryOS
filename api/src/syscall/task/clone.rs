@@ -260,10 +260,15 @@ pub fn sys_clone(
             if should_stop {
                 if let Some(tracer_pid) = tracer {
                     // Initialize the child thread's ptrace state with the same tracer
+                    // Child starts with SIGSTOP (per man page for TRACEME/ATTACH)
                     if let Ok(child_state) = ensure_state_for_pid(tid as Pid) {
                         child_state.with_mut(|state| {
                             state.being_traced = true;
                             state.tracer = Some(tracer_pid);
+                            // Mark as already stopped with SIGSTOP so tracer can waitpid immediately
+                            state.stopped = true;
+                            state.stop_reason = Some(StopReason::Signal(Signo::SIGSTOP as i32));
+                            state.stop_reported = false;
                         });
                     }
 
