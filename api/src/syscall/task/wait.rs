@@ -134,13 +134,15 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
     };
 
     // EXPLICIT PID CHECK: Handle non-child tracees (strace -p)
-    // When a specific PID is requested, check if we're tracing that process
+    // When a specific PID is requested, check if we're tracing that process/thread
     // even if it's not a child (needed for PTRACE_ATTACH / strace -p).
     #[cfg(feature = "ptrace")]
     if pid_value > 0 {
-        use starry_core::task::get_process_by_pid;
+        use starry_core::task::{get_task, AsThread};
 
-        if let Ok(_target_proc) = get_process_by_pid(pid_value as _) {
+        // Use get_task to find threads by TID (not just processes by PID)
+        if let Ok(target_task) = get_task(pid_value as _) {
+            let target_proc = target_task.as_thread().proc_data.proc.clone();
             // Check if current process is the tracer of this target
             if starry_ptrace::is_tracer_of(proc.pid(), pid_value as _) {
                 // We are tracing this process - check for ptrace stop
@@ -176,28 +178,16 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
                         Poll::Ready(status)
                     } else {
                         // Also check if the tracee has exited.
-                        // We need to get the process data again here because it might have changed.
-                        if let Ok(target_proc) = starry_core::task::get_process_by_pid(pid_value as _) {
-                            if target_proc.is_zombie() {
-                                info!("sys_waitpid: non-child tracee {} exited while blocking", pid_value);
-                                let zombie_info = target_proc.get_zombie_info().expect("Zombie process must have zombie info");
-                                let wait_status = if let Some(signo) = zombie_info.signal {
-                                    WaitStatus::signaled(signo, zombie_info.core_dumped)
-                                } else {
-                                    WaitStatus::exited(zombie_info.exit_code)
-                                };
-                                Poll::Ready(wait_status.as_raw())
+                        if target_proc.is_zombie() {
+                            info!("sys_waitpid: non-child tracee {} exited while blocking", pid_value);
+                            let zombie_info = target_proc.get_zombie_info().expect("Zombie process must have zombie info");
+                            let wait_status = if let Some(signo) = zombie_info.signal {
+                                WaitStatus::signaled(signo, zombie_info.core_dumped)
                             } else {
-                                Poll::Pending
-                            }
+                                WaitStatus::exited(zombie_info.exit_code)
+                            };
+                            Poll::Ready(wait_status.as_raw())
                         } else {
-                            // If get_process_by_pid fails, the process no longer exists.
-                            // This implies it has exited.
-                            // The SIGCHLD should have already woken us up, and the is_zombie() check
-                            // above should have caught it. If we reach here, it's likely a race
-                            // condition where the process exited and was reaped before we could check.
-                            // For now, we'll treat this as pending and rely on SIGCHLD to eventually
-                            // cause a successful return from waitpid in the main loop.
                             Poll::Pending
                         }
                     }

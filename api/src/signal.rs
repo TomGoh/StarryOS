@@ -24,7 +24,8 @@ pub fn check_signals(
     // If the process is being traced, stop and let the tracer decide what to do with the signal
     #[cfg(feature = "ptrace")]
     {
-        if starry_ptrace::is_being_traced() {
+        // SIGKILL cannot be intercepted by ptrace
+        if starry_ptrace::is_being_traced() && signo != starry_signal::Signo::SIGKILL {
             let action = starry_ptrace::signal_stop(signo as i32, uctx);
 
             match action {
