@@ -51,6 +51,7 @@ pub mod ptrace {
     pub const PTRACE_O_TRACEVFORK: u32 = 0x00000004;
     pub const PTRACE_O_TRACECLONE: u32 = 0x00000008;
     pub const PTRACE_O_TRACEEXEC: u32 = 0x00000010;
+    pub const PTRACE_O_TRACEVFORKDONE: u32 = 0x00000020;
     pub const PTRACE_O_TRACEEXIT: u32 = 0x00000040;
 
     // Ptrace events
@@ -258,6 +259,11 @@ pub fn wexitstatus(status: i32) -> i32 {
 /// Get stop signal
 pub fn wstopsig(status: i32) -> i32 {
     libc::WSTOPSIG(status)
+}
+
+/// Check if status indicates process was signaled
+pub fn wifsignaled(status: i32) -> bool {
+    libc::WIFSIGNALED(status)
 }
 
 /// Extract ptrace event code from wait status
