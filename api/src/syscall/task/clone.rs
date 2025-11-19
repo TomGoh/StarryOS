@@ -225,43 +225,45 @@ pub fn sys_clone(
 
     #[cfg(feature = "ptrace")]
     {
-        use starry_ptrace::{PtraceOptions, StopReason, get_tracer, stop_current_and_wait, ensure_state_for_pid};
+        use starry_ptrace::{PtraceOptions, StopReason, stop_current_and_wait, ensure_state_for_pid};
         use starry_core::task::send_signal_to_process;
         use starry_signal::SignalInfo;
 
         if starry_ptrace::is_being_traced() {
-
-            let current_pid = current().as_thread().proc_data.proc.pid();
-
-            let (should_stop, stop_reason) = starry_ptrace::ensure_state_for_current().map(|state| {
+            let (should_stop, stop_reason, tracer) = starry_ptrace::ensure_state_for_current().map(|state| {
                 state.with(|s| {
                     let options = s.options;
+                    let tracer = s.tracer;
                     if flags.contains(CloneFlags::VFORK) {
                         (
                             options.contains(PtraceOptions::TRACEVFORK),
-                            StopReason::Vfork(tid as Pid)
+                            StopReason::Vfork(tid as Pid),
+                            tracer
                         )
                     } else if flags.contains(CloneFlags::THREAD) {
                         (
                             options.contains(PtraceOptions::TRACECLONE),
-                            StopReason::Clone(tid as Pid)
+                            StopReason::Clone(tid as Pid),
+                            tracer
                         )
                     } else {
                         (
                             options.contains(PtraceOptions::TRACEFORK),
-                            StopReason::Fork(tid as Pid)
+                            StopReason::Fork(tid as Pid),
+                            tracer
                         )
                     }
                 })
-            }).unwrap_or((false, StopReason::Fork(0)));
-        
+            }).unwrap_or((false, StopReason::Fork(0), None));
+
 
             if should_stop {
-                if let Ok(tracer) = get_tracer(current_pid) {
+                if let Some(tracer_pid) = tracer {
+                    // Initialize the child thread's ptrace state with the same tracer
                     if let Ok(child_state) = ensure_state_for_pid(tid as Pid) {
                         child_state.with_mut(|state| {
                             state.being_traced = true;
-                            state.tracer = Some(tracer);
+                            state.tracer = Some(tracer_pid);
                         });
                     }
 
@@ -271,7 +273,7 @@ pub fn sys_clone(
                 stop_current_and_wait(stop_reason, uctx);
             }
         }
-        
+
     }
 
     Ok(tid as _)
