@@ -18,6 +18,8 @@ use starry_core::{
 use starry_process::Pid;
 use starry_signal::{SignalInfo, Signo};
 use starry_vm::{VmMutPtr, VmPtr};
+#[cfg(feature = "ptrace")]
+use starry_ptrace::notify_vfork_done;
 
 use crate::{
     signal::{check_signals, unblock_next_signal},
@@ -244,6 +246,13 @@ pub fn do_exit(exit_code: i32, group_exit: bool, signal: Option<Signo>, core_dum
         "{:?} exit with code: {}, signal: {:?}, core_dumped: {}",
         thr.proc_data.proc, exit_code, signal, core_dumped
     );
+
+    #[cfg(feature = "ptrace")]
+    {
+        if let Some(parent) = thr.proc_data.proc.parent() {
+            notify_vfork_done(parent.pid(), thr.proc_data.proc.pid());
+        }
+    }
 
     let clear_child_tid = thr.clear_child_tid() as *mut u32;
     if clear_child_tid.vm_write(0).is_ok() {
