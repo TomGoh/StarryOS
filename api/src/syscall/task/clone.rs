@@ -225,39 +225,48 @@ pub fn sys_clone(
 
     #[cfg(feature = "ptrace")]
     {
-        use starry_ptrace::{PtraceOptions, StopReason, stop_current_and_wait, ensure_state_for_pid};
+        use starry_ptrace::{PtraceOptions, StopReason, stop_current_and_wait, ensure_state_for_pid, ensure_state_for_current};
         use starry_core::task::send_signal_to_process;
         use starry_signal::SignalInfo;
 
-        if starry_ptrace::is_being_traced() {
-            let (should_stop, stop_reason, tracer) = starry_ptrace::ensure_state_for_current().map(|state| {
-                state.with(|s| {
-                    let options = s.options;
-                    let tracer = s.tracer;
-                    if flags.contains(CloneFlags::VFORK) {
-                        (
-                            options.contains(PtraceOptions::TRACEVFORK),
-                            StopReason::Vfork(tid as Pid),
-                            tracer
-                        )
-                    } else if flags.contains(CloneFlags::THREAD) {
-                        (
-                            options.contains(PtraceOptions::TRACECLONE),
-                            StopReason::Clone(tid as Pid),
-                            tracer
-                        )
-                    } else {
-                        (
-                            options.contains(PtraceOptions::TRACEFORK),
-                            StopReason::Fork(tid as Pid),
-                            tracer
-                        )
-                    }
-                })
-            }).unwrap_or((false, StopReason::Fork(0), None));
+        if let Ok(state) = ensure_state_for_current() {
+            let (should_stop, stop_reason, tracer) = state.with(|s| {
+                let options = s.options;
+                let tracer = s.tracer;
+                if flags.contains(CloneFlags::VFORK) {
+                    (
+                        options.contains(PtraceOptions::TRACEVFORK),
+                        StopReason::Vfork(tid as Pid),
+                        tracer
+                    )
+                } else if flags.contains(CloneFlags::THREAD) {
+                    (
+                        options.contains(PtraceOptions::TRACECLONE),
+                        StopReason::Clone(tid as Pid),
+                        tracer
+                    )
+                } else {
+                    (
+                        options.contains(PtraceOptions::TRACEFORK),
+                        StopReason::Fork(tid as Pid),
+                        tracer
+                    )
+                }
+            });
 
 
             if should_stop {
+                // Record the vfork child for a later VFORK_DONE event.
+                if flags.contains(CloneFlags::VFORK) {
+                    if let Ok(parent_state) = starry_ptrace::ensure_state_for_current() {
+                        parent_state.with_mut(|state| {
+                            if state.options.contains(PtraceOptions::TRACEVFORKDONE) {
+                                state.pending_vfork_done = Some(tid as Pid);
+                            }
+                        });
+                    }
+                }
+
                 if let Some(tracer_pid) = tracer {
                     // Initialize the child thread's ptrace state with the same tracer
                     // Child starts with SIGSTOP (per man page for TRACEME/ATTACH)

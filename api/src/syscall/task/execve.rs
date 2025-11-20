@@ -6,6 +6,8 @@ use axfs_ng::FS_CONTEXT;
 use axhal::uspace::UserContext;
 use axtask::current;
 use starry_core::{mm::load_user_app, task::AsThread};
+#[cfg(feature = "ptrace")]
+use starry_ptrace::{StopReason, notify_vfork_done, stop_current_and_wait};
 use starry_vm::vm_load_until_nul;
 
 use crate::{file::FD_TABLE, mm::vm_load_string};
@@ -42,6 +44,10 @@ pub fn sys_execve(
 
     let curr = current();
     let proc_data = &curr.as_thread().proc_data;
+    #[cfg(feature = "ptrace")]
+    if let Some(parent) = proc_data.proc.parent() {
+        notify_vfork_done(parent.pid(), proc_data.proc.pid());
+    }
 
     if proc_data.proc.threads().len() > 1 {
         // TODO: handle multi-thread case
@@ -75,5 +81,10 @@ pub fn sys_execve(
 
     uctx.set_ip(entry_point.as_usize());
     uctx.set_sp(user_stack_base.as_usize());
+    #[cfg(feature = "ptrace")]
+    {
+        // Generate PTRACE_EVENT_EXEC if requested.
+        stop_current_and_wait(StopReason::Exec, uctx);
+    }
     Ok(0)
 }

@@ -5,6 +5,8 @@ use axhal::uspace::UserContext;
 use axtask::current;
 use starry_core::task::{AsThread, Thread};
 use starry_signal::{SignalOSAction, SignalSet};
+#[cfg(feature = "ptrace")]
+use starry_ptrace::{StopReason, stop_current_and_wait};
 use axlog::info;
 
 use crate::task::{do_continue, do_exit, do_stop};
@@ -56,12 +58,16 @@ pub fn check_signals(
     match os_action {
         SignalOSAction::Terminate => {
             info!("{:?} terminated by signal {:?}", thr.proc_data.proc, signo);
+            #[cfg(feature = "ptrace")]
+            stop_current_and_wait(StopReason::Exit(128 + signo as i32), uctx);
             do_exit(128 + signo as i32, true, Some(signo), false);
         }
         SignalOSAction::CoreDump => {
             // TODO: implement core dump,
             // now the core_dumped is set to true as a indication without actual core dump
             info!("{:?} core dumped by signal {:?}", thr.proc_data.proc, signo);
+            #[cfg(feature = "ptrace")]
+            stop_current_and_wait(StopReason::Exit(128 + signo as i32), uctx);
             do_exit(128 + signo as i32, true, Some(signo), true);
         }
         SignalOSAction::Stop => {
