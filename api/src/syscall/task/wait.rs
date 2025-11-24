@@ -64,16 +64,16 @@ impl WaitPid {
 /// Waits for a child process to change state.
 ///
 /// This function implements the `wait4` and `waitpid` syscalls. It suspends the
-/// execution of the current process until a child specified by `pid` has changed
-/// state.
+/// execution of the current process until a child specified by `pid` has
+/// changed state.
 ///
 /// # Arguments
 /// * `pid` - Specifies the set of child processes to wait for:
-///   - `< -1`: Wait for any child process whose process group ID is equal to the
-///     absolute value of `pid`.
+///   - `< -1`: Wait for any child process whose process group ID is equal to
+///     the absolute value of `pid`.
 ///   - `-1`: Wait for any child process.
-///   - `0`: Wait for any child process whose process group ID is equal to that of
-///     the calling process.
+///   - `0`: Wait for any child process whose process group ID is equal to that
+///     of the calling process.
 ///   - `> 0`: Wait for the child whose process ID is equal to `pid`.
 /// * `exit_code` - A pointer to an integer where the status information of the
 ///   terminated child will be stored. The status can be inspected with macros
@@ -87,8 +87,8 @@ impl WaitPid {
 ///   data structures are freed).
 /// - **Stopped**: If `WUNTRACED` is set, it returns for children that have been
 ///   stopped by a signal. The status indicates the signal that caused the stop.
-/// - **Continued**: If `WCONTINUED` is set, it returns for stopped children that
-///   have been resumed by `SIGCONT`.
+/// - **Continued**: If `WCONTINUED` is set, it returns for stopped children
+///   that have been resumed by `SIGCONT`.
 ///
 /// # Blocking Behavior
 /// - By default, the call blocks until a child changes state.
@@ -99,14 +99,14 @@ impl WaitPid {
 ///
 /// # Return Value
 /// - On success, returns the process ID of the child that changed state.
-/// - If `WNOHANG` was specified and no child has changed state, `0` is returned.
+/// - If `WNOHANG` was specified and no child has changed state, `0` is
+///   returned.
 /// - On error, returns `Err(AxError)`. Common errors include:
 ///   - `ECHILD`: The process does not have any children to wait for.
 ///   - `EINTR`: The call was interrupted by a signal.
 ///   - `EINVAL`: Invalid options were provided.
 pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isize> {
-    let options =
-        WaitOptions::from_bits(options).ok_or(AxError::Other(LinuxError::EINVAL))?;
+    let options = WaitOptions::from_bits(options).ok_or(AxError::Other(LinuxError::EINVAL))?;
     info!("sys_waitpid <= pid: {pid:?}, options: {options:?}");
 
     // Currently, WNOTHREAD, WALL, and WCLONE are not supported.
@@ -138,7 +138,7 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
     // even if it's not a child (needed for PTRACE_ATTACH / strace -p).
     #[cfg(feature = "ptrace")]
     if pid_value > 0 {
-        use starry_core::task::{get_task, AsThread};
+        use starry_core::task::{AsThread, get_task};
 
         // Use get_task to find threads by TID (not just processes by PID)
         if let Ok(target_task) = get_task(pid_value as _) {
@@ -147,8 +147,10 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
             if starry_ptrace::is_tracer_of(proc.pid(), pid_value as _) {
                 // We are tracing this process - check for ptrace stop
                 if let Some(status) = starry_ptrace::check_ptrace_stop(pid_value as _) {
-                    info!("sys_waitpid: found ptrace-stopped non-child tracee {} (status=0x{:x})",
-                          pid_value, status);
+                    info!(
+                        "sys_waitpid: found ptrace-stopped non-child tracee {} (status=0x{:x})",
+                        pid_value, status
+                    );
                     if let Some(exit_code_ptr) = exit_code.nullable() {
                         let _ = exit_code_ptr.vm_write(status);
                     }
@@ -157,7 +159,10 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
 
                 // No stop ready - handle WNOHANG or block
                 if options.contains(WaitOptions::WNOHANG) {
-                    info!("sys_waitpid: non-child tracee {} not stopped, WNOHANG returning 0", pid_value);
+                    info!(
+                        "sys_waitpid: non-child tracee {} not stopped, WNOHANG returning 0",
+                        pid_value
+                    );
                     return Ok(0);
                 }
 
@@ -173,18 +178,26 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
                     // the race condition where the tracee stops *after* the initial
                     // check but *before* we start polling.
                     if let Some(status) = starry_ptrace::check_ptrace_stop(pid_value as _) {
-                        info!("sys_waitpid: non-child tracee {} stopped while blocking (status=0x{:x})",
-                                pid_value, status);
+                        info!(
+                            "sys_waitpid: non-child tracee {} stopped while blocking \
+                             (status=0x{:x})",
+                            pid_value, status
+                        );
                         Poll::Ready(status)
                     } else {
                         // Also check if the tracee has exited.
                         if target_proc.is_zombie() {
-                            info!("sys_waitpid: non-child tracee {} exited while blocking", pid_value);
-                            let zombie_info = target_proc.get_zombie_info().expect("Zombie process must have zombie info");
+                            info!(
+                                "sys_waitpid: non-child tracee {} exited while blocking",
+                                pid_value
+                            );
+                            let zombie_info = target_proc
+                                .get_zombie_info()
+                                .expect("Zombie process must have zombie info");
                             let wait_status = if let Some(signo) = zombie_info.signal {
                                 WaitStatus::signaled(signo, zombie_info.core_dumped)
                             } else {
-                                WaitStatus::exited(zombie_info.exit_code)
+                                WaitStatus::exited(zombie_info.exit_code.as_raw())
                             };
                             Poll::Ready(wait_status.as_raw())
                         } else {
@@ -230,24 +243,25 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
             return Err(AxError::Other(LinuxError::ECHILD));
         }
         // Priority 1: Check for continued children (WCONTINUED)
-        // This must come before zombie check because a process can be in Continued state
-        // briefly before becoming a zombie (e.g., stopped process receives SIGCONT then exits).
-        if options.contains(WaitOptions::WCONTINUED)
-            && let Some(continued_child) = children.iter().find(|child| child.is_continued())
-        {
-            info!("sys_waitpid: found continued child {}", continued_child.pid());
-            let wait_status = WaitStatus::continued();
-            if let Some(exit_code_ptr) = exit_code.nullable() {
-                let _ = exit_code_ptr.vm_write(wait_status.as_raw());
+        // This must come before zombie check because a process can be in Continued
+        // state briefly before becoming a zombie (e.g., stopped process
+        // receives SIGCONT then exits).
+        if options.contains(WaitOptions::WCONTINUED) {
+            for child in &children {
+                if child.try_consume_continued() {
+                    info!("sys_waitpid: found continued child {}", child.pid());
+                    let wait_status = WaitStatus::continued();
+                    if let Some(exit_code_ptr) = exit_code.nullable() {
+                        let _ = exit_code_ptr.vm_write(wait_status.as_raw());
+                    }
+                    return Ok(Some(child.pid() as isize));
+                }
             }
-            // Acknowledge that parent has been notified
-            continued_child.ack_continued();
-            return Ok(Some(continued_child.pid() as isize));
         }
 
         // Priority 2: Check for ptrace-stopped children (BEFORE signal-stops)
-        // Ptrace stops are NOT gated by WUNTRACED - they are always visible to the tracer.
-        // The check_ptrace_stop() function handles tracer verification.
+        // Ptrace stops are NOT gated by WUNTRACED - they are always visible to the
+        // tracer. The check_ptrace_stop() function handles tracer verification.
         #[cfg(feature = "ptrace")]
         {
             for child in children.iter() {
@@ -273,29 +287,30 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
 
         // Priority 3: Check for signal-stopped children (WUNTRACED)
         // Only report signal-stops (not ptrace-stops) when WUNTRACED is set.
-        if options.contains(WaitOptions::WUNTRACED)
-            && let Some(stopped_child) = children.iter().find(|child| {
-                // Only report signal-stops, not ptrace-stops
-                // is_signal_stopped() checks is_ptrace_stopped == false
-                child.is_signal_stopped() && child.stopped_unacked()
-            })
-            && let Some(stopping_signal) = stopped_child.get_stop_signal()
-        {
-            info!("sys_waitpid: found signal-stopped child {} (signal {})", stopped_child.pid(), stopping_signal);
-            let wait_status = WaitStatus::stopped(stopping_signal);
-            if let Some(exit_code_ptr) = exit_code.nullable() {
-                let _ = exit_code_ptr.vm_write(wait_status.as_raw());
+        if options.contains(WaitOptions::WUNTRACED) {
+            for child in &children {
+                if let Some(stopping_signal) = child.try_consume_stopped() {
+                    info!(
+                        "sys_waitpid: found signal-stopped child {} (signal {})",
+                        child.pid(),
+                        stopping_signal
+                    );
+                    let wait_status = WaitStatus::stopped(stopping_signal);
+                    if let Some(exit_code_ptr) = exit_code.nullable() {
+                        let _ = exit_code_ptr.vm_write(wait_status.as_raw());
+                    }
+                    return Ok(Some(child.pid() as isize));
+                }
             }
-            // Acknowledge that parent has been notified of stop
-            stopped_child.ack_stopped();
-            return Ok(Some(stopped_child.pid() as isize));
         }
 
         // Check for any zombie children
         if let Some(child) = children.iter().find(|child| child.is_zombie()) {
             info!("sys_waitpid: found zombie child {}", child.pid());
             // Get zombie termination info before freeing
-            let zombie_info = child.get_zombie_info().ok_or(AxError::Other(LinuxError::ECHILD))?;
+            let zombie_info = child
+                .get_zombie_info()
+                .ok_or(AxError::Other(LinuxError::ECHILD))?;
 
             if !options.contains(WaitOptions::WNOWAIT) {
                 child.free();
@@ -305,7 +320,7 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
             let wait_status = if let Some(signo) = zombie_info.signal {
                 WaitStatus::signaled(signo, zombie_info.core_dumped)
             } else {
-                WaitStatus::exited(zombie_info.exit_code)
+                WaitStatus::exited(zombie_info.exit_code.as_raw())
             };
 
             if let Some(exit_code_ptr) = exit_code.nullable() {

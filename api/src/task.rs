@@ -16,10 +16,10 @@ use starry_core::{
     time::TimerState,
 };
 use starry_process::Pid;
-use starry_signal::{SignalInfo, Signo};
-use starry_vm::{VmMutPtr, VmPtr};
 #[cfg(feature = "ptrace")]
 use starry_ptrace::notify_vfork_done;
+use starry_signal::{SignalInfo, Signo};
+use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
     signal::{check_signals, unblock_next_signal},
@@ -200,8 +200,9 @@ pub fn exit_robust_list(head: *const RobustListHead) -> AxResult<()> {
 
 /// Terminates the current thread and potentially the entire process.
 ///
-/// This function handles the cleanup for a thread that is exiting. If this is the
-/// last thread in the process, it will also handle the full process termination.
+/// This function handles the cleanup for a thread that is exiting. If this is
+/// the last thread in the process, it will also handle the full process
+/// termination.
 ///
 /// A thread can exit for several reasons:
 /// - It called the `exit` or `exit_group` syscall.
@@ -209,16 +210,16 @@ pub fn exit_robust_list(head: *const RobustListHead) -> AxResult<()> {
 ///
 /// The termination procedure involves several steps:
 ///
-/// 1. **TID Futex Cleanup**: If the `clear_child_tid` attribute was set by `clone()`,
-///    this function writes 0 to the specified user-space address and wakes up any
-///    threads waiting on that futex. This is used to notify a parent thread when
-///    a child thread exits.
+/// 1. **TID Futex Cleanup**: If the `clear_child_tid` attribute was set by
+///    `clone()`, this function writes 0 to the specified user-space address and
+///    wakes up any threads waiting on that futex. This is used to notify a
+///    parent thread when a child thread exits.
 ///
-/// 2. **Robust Futex Cleanup**: It processes the robust futex list, releasing any
-///    futexes held by the exiting thread to prevent deadlocks.
+/// 2. **Robust Futex Cleanup**: It processes the robust futex list, releasing
+///    any futexes held by the exiting thread to prevent deadlocks.
 ///
-/// 3. **Thread Exit**: It marks the current thread as exited within the process's
-///    thread list.
+/// 3. **Thread Exit**: It marks the current thread as exited within the
+///    process's thread list.
 ///
 /// 4. **Process Termination (if last thread)**: If this is the last thread, it
 ///    triggers process-wide cleanup:
@@ -227,16 +228,20 @@ pub fn exit_robust_list(head: *const RobustListHead) -> AxResult<()> {
 ///      `waitpid` calls.
 ///    - Cleans up resources like shared memory.
 ///
-/// 5. **Group Exit**: If `group_exit` is true, it ensures all other threads in the
-///    same process are also terminated by sending them `SIGKILL`.
+/// 5. **Group Exit**: If `group_exit` is true, it ensures all other threads in
+///    the same process are also terminated by sending them `SIGKILL`.
 ///
 /// 6. **Task Scheduling**: Finally, it marks the current kernel task as exited,
-///    so the scheduler will not run it anymore and can deallocate its resources.
+///    so the scheduler will not run it anymore and can deallocate its
+///    resources.
 ///
 /// # Arguments
-/// * `exit_code` - The exit code of the process, or the signal number if terminated by a signal.
-/// * `group_exit` - If `true`, terminate all threads in the process's thread group.
-/// * `signal` - If the process was terminated by a signal, this contains the signal number.
+/// * `exit_code` - The exit code of the process, or the signal number if
+///   terminated by a signal.
+/// * `group_exit` - If `true`, terminate all threads in the process's thread
+///   group.
+/// * `signal` - If the process was terminated by a signal, this contains the
+///   signal number.
 /// * `core_dumped` - If `true`, indicates that a core dump was generated.
 pub fn do_exit(exit_code: i32, group_exit: bool, signal: Option<Signo>, core_dumped: bool) {
     let curr = current();
@@ -331,7 +336,7 @@ pub fn raise_signal_fatal(sig: SignalInfo) -> AxResult<()> {
 /// # Arguments
 /// * `stop_signal` - The signal number that caused the process to stop.
 pub fn do_stop(stop_signal: i32) {
-        let curr = current();
+    let curr = current();
     let curr_thread = curr.as_thread();
     let curr_process = &curr_thread.proc_data.proc;
 
@@ -358,8 +363,9 @@ pub fn do_stop(stop_signal: i32) {
 /// It also wakes up any threads of the process that were blocked in the main
 /// task loop, allowing them to resume execution.
 ///
-/// Notice that the state of the process after being continued are not guranteed.
-/// There is no auto-restart mechanism after a syscall has been interrupted.
+/// Notice that the state of the process after being continued are not
+/// guranteed. There is no auto-restart mechanism after a syscall has been
+/// interrupted.
 ///
 /// **Important**: SIGCONT only resumes signal-stops, NOT ptrace-stops.
 /// Ptrace-stops must be resumed by the tracer via PTRACE_CONT/SYSCALL/DETACH.

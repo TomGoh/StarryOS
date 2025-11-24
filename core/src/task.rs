@@ -83,7 +83,8 @@ pub struct ThreadInner {
     /// Ready to exit
     exit: AtomicBool,
 
-    /// Optional extension state for ptrace. See [`starry_ptrace::state::PtraceState`].
+    /// Optional extension state for ptrace. See
+    /// [`starry_ptrace::state::PtraceState`].
     #[cfg(feature = "ptrace")]
     pub ptrace_state: axsync::Mutex<Option<alloc::boxed::Box<dyn core::any::Any + Send + Sync>>>,
 }
@@ -434,7 +435,8 @@ pub fn get_process_data(pid: Pid) -> AxResult<Arc<ProcessData>> {
 }
 
 /// Finds the Process handle for the given PID.
-/// This is a convenience wrapper around get_process_data() for ptrace operations.
+/// This is a convenience wrapper around get_process_data() for ptrace
+/// operations.
 pub fn get_process_by_pid(pid: Pid) -> AxResult<Arc<Process>> {
     let proc_data = get_process_data(pid)?;
     Ok(proc_data.proc.clone())
@@ -538,7 +540,7 @@ pub fn send_signal_to_process(pid: Pid, sig: Option<SignalInfo>) -> AxResult<()>
                 proc_data.proc.continue_from_stop();
                 // Don't transition to Continued state - go directly to Running
                 // so the process can be killed immediately
-                proc_data.proc.ack_continued();
+                let _ = proc_data.proc.try_consume_continued();
             }
             proc_data.child_exit_event.wake();
         }
