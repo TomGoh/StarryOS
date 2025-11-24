@@ -26,7 +26,8 @@ pub fn test_fork_event_basic() -> TestResult {
                     // Grandchild - exit immediately
                     libc::exit(0);
                 } else if child_pid > 0 {
-                    // Child skips waiting so the tracer handles the grandchild lifecycle
+                    // Child skips waiting so the tracer handles the grandchild
+                    // lifecycle
                 }
             }
 
@@ -89,7 +90,10 @@ pub fn test_fork_event_basic() -> TestResult {
                 }
             };
 
-            print_success(&format!("Grandchild PID from GETEVENTMSG: {}", grandchild_pid));
+            print_success(&format!(
+                "Grandchild PID from GETEVENTMSG: {}",
+                grandchild_pid
+            ));
 
             if grandchild_pid <= 0 {
                 let _ = process::kill(child_pid, libc::SIGKILL);
@@ -196,7 +200,8 @@ pub fn test_fork_without_option() -> TestResult {
                     // Grandchild - exit immediately
                     libc::exit(0);
                 } else if child_pid > 0 {
-                    // Child does not wait; tracer suppresses SIGCHLD so waiting can hang
+                    // Child does not wait; tracer suppresses SIGCHLD so waiting
+                    // can hang
                 }
             }
 
@@ -442,7 +447,11 @@ pub fn test_exec_event() -> TestResult {
             let path = std::ffi::CString::new("/bin/true").unwrap();
             let arg0 = std::ffi::CString::new("true").unwrap();
             unsafe {
-                libc::execl(path.as_ptr(), arg0.as_ptr(), std::ptr::null::<libc::c_char>());
+                libc::execl(
+                    path.as_ptr(),
+                    arg0.as_ptr(),
+                    std::ptr::null::<libc::c_char>(),
+                );
             }
             process::exit(1);
         }
@@ -488,7 +497,10 @@ pub fn test_exec_event() -> TestResult {
             }
 
             if !wifexited(status) {
-                return Err(format!("Child did not exit normally, status: 0x{:x}", status));
+                return Err(format!(
+                    "Child did not exit normally, status: 0x{:x}",
+                    status
+                ));
             }
 
             print_success("Child exited after exec");
@@ -565,7 +577,10 @@ pub fn test_exit_event() -> TestResult {
             }
 
             if !wifexited(status) || wexitstatus(status) != 42 {
-                return Err(format!("Child exited with unexpected status: 0x{:x}", status));
+                return Err(format!(
+                    "Child exited with unexpected status: 0x{:x}",
+                    status
+                ));
             }
 
             print_success("Child exited with expected status 42");
@@ -607,10 +622,18 @@ pub fn test_vfork_event() -> TestResult {
                 return Err(format!("waitpid (initial) failed: {}", e));
             }
 
-            if let Err(e) =
-                ptrace::setoptions(child_pid, ptrace::PTRACE_O_TRACEVFORK | ptrace::PTRACE_O_TRACEVFORKDONE)
-            {
+            if let Err(e) = ptrace::setoptions(
+                child_pid,
+                ptrace::PTRACE_O_TRACEVFORK | ptrace::PTRACE_O_TRACEVFORKDONE,
+            ) {
                 let _ = process::kill(child_pid, libc::SIGKILL);
+                // If vfork tracing is not supported, skip the test
+                if e.kind() == std::io::ErrorKind::Unsupported {
+                    print_skip("PTRACE_O_TRACEVFORK not supported");
+                    // We need to wait for the child to exit since we killed it
+                    let _ = process::waitpid(child_pid, &mut status, 0);
+                    return Ok(());
+                }
                 return Err(format!("PTRACE_SETOPTIONS failed: {}", e));
             }
             print_success("PTRACE_O_TRACEVFORK and PTRACE_O_TRACEVFORKDONE options set");
@@ -704,7 +727,10 @@ pub fn test_vfork_event() -> TestResult {
 pub fn run_all_tests() -> (usize, usize) {
     let tests: Vec<(&str, fn() -> TestResult)> = vec![
         ("PTRACE_EVENT_FORK - Basic", test_fork_event_basic),
-        ("PTRACE_EVENT_FORK - Without Option", test_fork_without_option),
+        (
+            "PTRACE_EVENT_FORK - Without Option",
+            test_fork_without_option,
+        ),
         ("PTRACE_EVENT_CLONE - Basic", test_clone_event),
         ("PTRACE_EVENT_EXEC - Basic", test_exec_event),
         ("PTRACE_EVENT_EXIT - Basic", test_exit_event),
