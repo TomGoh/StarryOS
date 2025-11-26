@@ -197,7 +197,7 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
                             let wait_status = if let Some(signo) = zombie_info.signal {
                                 WaitStatus::signaled(signo, zombie_info.core_dumped)
                             } else {
-                                WaitStatus::exited(zombie_info.exit_code.as_raw())
+                                WaitStatus::exited(zombie_info.exit_code)
                             };
                             Poll::Ready(wait_status.as_raw())
                         } else {
@@ -320,7 +320,7 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
             let wait_status = if let Some(signo) = zombie_info.signal {
                 WaitStatus::signaled(signo, zombie_info.core_dumped)
             } else {
-                WaitStatus::exited(zombie_info.exit_code.as_raw())
+                WaitStatus::exited(zombie_info.exit_code)
             };
 
             if let Some(exit_code_ptr) = exit_code.nullable() {
