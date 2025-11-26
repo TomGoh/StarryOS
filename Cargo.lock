@@ -2234,6 +2234,7 @@ dependencies = [
 name = "starry-process"
 version = "0.2.0"
 dependencies = [
+ "bitflags 2.10.0",
  "kspin",
  "lazyinit",
  "weak-map",
