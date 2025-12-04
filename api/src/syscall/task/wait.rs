@@ -14,7 +14,7 @@ use bitflags::bitflags;
 use linux_raw_sys::general::{
     __WALL, __WCLONE, __WNOTHREAD, WCONTINUED, WEXITED, WNOHANG, WNOWAIT, WUNTRACED,
 };
-use starry_core::task::{AsThread, get_process_data};
+use starry_core::task::AsThread;
 use starry_process::{Pid, Process};
 use starry_signal::Signo;
 use starry_vm::{VmMutPtr, VmPtr};
@@ -250,12 +250,14 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
 /// # Priority Order
 ///
 /// The function checks child states in the following priority order:
-/// 1. **Zombie** (terminated) - highest priority
-/// 2. **Stopped** (by signal)
-/// 3. **Continued** (by SIGCONT) - lowest priority
+/// 1. **Stop/Continue events** - Check for unreported stop/continue events
+///    first, even if the process has since become a zombie
+/// 2. **Zombie** (terminated) - Report exit status only if no unreported
+///    stop/continue events exist
 ///
-/// This ordering ensures that termination status is always reported before
-/// stop/continue status, matching POSIX semantics.
+/// This ordering ensures that all state transitions are reported in the order
+/// they occurred, matching Linux semantics. A process that stops, continues,
+/// then exits must report the continue event before the exit event.
 ///
 /// # Arguments
 ///
@@ -270,15 +272,20 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
 /// * `Ok(None)` - Child exists but has no waitable status matching the options
 /// * `Err(_)` - Error occurred while checking child status
 fn wait_consider_task(child: &Arc<Process>, options: WaitOptions) -> AxResult<Option<(Pid, i32)>> {
-    if let Some(result) = wait_task_zombie(child, options)? {
-        return Ok(Some(result));
-    }
+    // Check for unreported stop/continue events first, even if process is now
+    // zombie. This matches Linux behavior where stop/continue events must be
+    // reported before exit status if they occurred during the child's lifetime.
 
     if let Some(result) = wait_task_stopped(child, options)? {
         return Ok(Some(result));
     }
 
     if let Some(result) = wait_task_continued(child, options)? {
+        return Ok(Some(result));
+    }
+
+    // Only report zombie status if there are no unreported stop/continue events
+    if let Some(result) = wait_task_zombie(child, options)? {
         return Ok(Some(result));
     }
 
@@ -374,35 +381,38 @@ fn wait_task_zombie(child: &Arc<Process>, options: WaitOptions) -> AxResult<Opti
 ///
 /// # Returns
 ///
-/// * `Ok(Some((pid, status)))` - Child is stopped with unreported stop event
-/// * `Ok(None)` - Child is not stopped, or no unreported stop event, or
-///   `WUNTRACED` not set
-/// * `Err(_)` - Failed to access child's `ProcessData`
+/// * `Ok(Some((pid, status)))` - Child has unreported stop event
+/// * `Ok(None)` - Child has no unreported stop event or `WUNTRACED` not set
+/// * `Err(_)` - Failed to decode signal number
 fn wait_task_stopped(child: &Arc<Process>, options: WaitOptions) -> AxResult<Option<(Pid, i32)>> {
     if !options.contains(WaitOptions::WUNTRACED) {
         return Ok(None);
     }
 
-    if !child.is_stopped() {
-        return Ok(None);
-    }
-
     let child_pid = child.pid();
-    let child_proc_data = get_process_data(child_pid)?;
 
-    if let Some(signal) = child_proc_data.signal.peek_pending_stop_event() {
+    // Check for unreported stop event, regardless of current process state.
+    // A process may have been stopped, then continued, then exited - but we still
+    // need to report the stop event if it hasn't been consumed yet.
+    //
+    // Signal events are stored in the Process's ThreadGroup,
+    // which persists until the zombie is reaped.
+    if let Some(signal_num) = child.peek_pending_stop_event() {
+        let signal = Signo::from_repr(signal_num).ok_or_else(|| {
+            warn!(
+                "Process {} has unknown stop signal {}",
+                child_pid, signal_num
+            );
+            AxError::from(LinuxError::EINVAL)
+        })?;
         let status_code = WaitStatus::Stopped(signal).encode();
 
         if !options.contains(WaitOptions::WNOWAIT) {
-            child_proc_data.signal.consume_stop_event();
+            child.consume_stop_event();
         }
 
         Ok(Some((child_pid, status_code)))
     } else {
-        info!(
-            "Process {} is stopped but has no stop signal captured",
-            child_pid
-        );
         Ok(None)
     }
 }
@@ -425,28 +435,27 @@ fn wait_task_stopped(child: &Arc<Process>, options: WaitOptions) -> AxResult<Opt
 ///
 /// # Returns
 ///
-/// * `Ok(Some((pid, status)))` - Child is running with unreported continue
-///   event
-/// * `Ok(None)` - Child is not running, or no unreported continue event, or
-///   `WCONTINUED` not set
-/// * `Err(_)` - Failed to access child's `ProcessData`
+/// * `Ok(Some((pid, status)))` - Child has unreported continue event
+/// * `Ok(None)` - Child has no unreported continue event or `WCONTINUED` not set
+/// * `Err(_)` - Should not occur in current implementation
 fn wait_task_continued(child: &Arc<Process>, options: WaitOptions) -> AxResult<Option<(Pid, i32)>> {
     if !options.contains(WaitOptions::WCONTINUED) {
         return Ok(None);
     }
 
-    if !child.is_running() {
-        return Ok(None);
-    }
-
     let child_pid = child.pid();
-    let child_proc_data = get_process_data(child_pid)?;
 
-    if child_proc_data.signal.peek_pending_cont_event() {
+    // Check for unreported continue event, regardless of current process state.
+    // A process may have been continued and then exited - but we still need to
+    // report the continue event if it hasn't been consumed yet.
+    //
+    // Signal events are stored in the Process's ThreadGroup,
+    // which persists until the zombie is reaped.
+    if child.peek_pending_cont_event() {
         let status_code = WaitStatus::Continued.encode();
 
         if !options.contains(WaitOptions::WNOWAIT) {
-            child_proc_data.signal.consume_cont_event();
+            child.consume_cont_event();
         }
 
         Ok(Some((child_pid, status_code)))

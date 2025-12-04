@@ -386,8 +386,8 @@ pub(crate) fn do_stop(stop_signal: Signo) {
         }
     });
 
-    // record the stop signal in the `ProcessSignalManager`
-    curr_thread.proc_data.signal.set_stop_signal(stop_signal);
+    // record the stop signal in the Process for waitpid reporting
+    curr_process.set_stop_signal(stop_signal as u8);
 
     // change the state of current process to `STOPPED`
     curr_process.transition_to_stopped();
@@ -436,8 +436,8 @@ pub(crate) fn do_continue() {
         }
     }
 
-    // record the continue event in the `ProcessSignalManager`
-    curr_thread.proc_data.signal.set_cont_signal();
+    // record the continue event in the Process for waitpid reporting
+    curr_proc.set_cont_signal();
 
     // change the state of current process to `RUNNING`
     curr_proc.transition_to_running();
