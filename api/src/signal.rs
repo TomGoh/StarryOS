@@ -111,7 +111,7 @@ pub fn check_signals(
         }
         SignalOSAction::CoreDump => {
             // TODO: implement core dump
-            do_exit(128 + signo as i32, true);
+            do_exit((signo as i32) | 0x80, true);
         }
         SignalOSAction::Stop => {
             info!("Process {} stopped due to signal", thr.proc_data.proc.pid());
