@@ -14,7 +14,7 @@ use bitflags::bitflags;
 use linux_raw_sys::general::{
     __WALL, __WCLONE, __WNOTHREAD, WCONTINUED, WEXITED, WNOHANG, WNOWAIT, WUNTRACED,
 };
-use starry_core::task::AsThread;
+use starry_core::task::{AsThread, get_process_data};
 use starry_process::{Pid, Process};
 use starry_signal::Signo;
 use starry_vm::{VmMutPtr, VmPtr};
@@ -390,6 +390,16 @@ fn wait_task_stopped(child: &Arc<Process>, options: WaitOptions) -> AxResult<Opt
     }
 
     let child_pid = child.pid();
+    let child_proc_data_res = get_process_data(child_pid);
+
+    // We can read the child from the parent's children list,
+    // but cannot obtain the procedd data, indicating that the child
+    // has already exited
+    // Now it will be handled in the wait_task_zombie in the wait_consider_task
+    if child_proc_data_res.is_err() {
+        return Ok(None);
+    }
+    let child_proc_data = child_proc_data_res.unwrap();
 
     // Check for unreported stop event, regardless of current process state.
     // A process may have been stopped, then continued, then exited - but we still
@@ -397,18 +407,11 @@ fn wait_task_stopped(child: &Arc<Process>, options: WaitOptions) -> AxResult<Opt
     //
     // Signal events are stored in the Process's ThreadGroup,
     // which persists until the zombie is reaped.
-    if let Some(signal_num) = child.peek_pending_stop_event() {
-        let signal = Signo::from_repr(signal_num).ok_or_else(|| {
-            warn!(
-                "Process {} has unknown stop signal {}",
-                child_pid, signal_num
-            );
-            AxError::from(LinuxError::EINVAL)
-        })?;
+    if let Some(signal) = child_proc_data.signal.peek_pending_stop_event() {
         let status_code = WaitStatus::Stopped(signal).encode();
 
         if !options.contains(WaitOptions::WNOWAIT) {
-            child.consume_stop_event();
+            child_proc_data.signal.consume_stop_event();
         }
 
         Ok(Some((child_pid, status_code)))
@@ -436,7 +439,8 @@ fn wait_task_stopped(child: &Arc<Process>, options: WaitOptions) -> AxResult<Opt
 /// # Returns
 ///
 /// * `Ok(Some((pid, status)))` - Child has unreported continue event
-/// * `Ok(None)` - Child has no unreported continue event or `WCONTINUED` not set
+/// * `Ok(None)` - Child has no unreported continue event or `WCONTINUED` not
+///   set
 /// * `Err(_)` - Should not occur in current implementation
 fn wait_task_continued(child: &Arc<Process>, options: WaitOptions) -> AxResult<Option<(Pid, i32)>> {
     if !options.contains(WaitOptions::WCONTINUED) {
@@ -444,6 +448,16 @@ fn wait_task_continued(child: &Arc<Process>, options: WaitOptions) -> AxResult<O
     }
 
     let child_pid = child.pid();
+    let child_proc_data_res = get_process_data(child_pid);
+
+    // We can read the child from the parent's children list,
+    // but cannot obtain the procedd data, indicating that the child
+    // has already exited
+    // Now it will be handled in the wait_task_zombie in the wait_consider_task
+    if child_proc_data_res.is_err() {
+        return Ok(None);
+    }
+    let child_proc_data = child_proc_data_res.unwrap();
 
     // Check for unreported continue event, regardless of current process state.
     // A process may have been continued and then exited - but we still need to
@@ -451,11 +465,11 @@ fn wait_task_continued(child: &Arc<Process>, options: WaitOptions) -> AxResult<O
     //
     // Signal events are stored in the Process's ThreadGroup,
     // which persists until the zombie is reaped.
-    if child.peek_pending_cont_event() {
+    if child_proc_data.signal.peek_pending_cont_event() {
         let status_code = WaitStatus::Continued.encode();
 
         if !options.contains(WaitOptions::WNOWAIT) {
-            child.consume_cont_event();
+            child_proc_data.signal.consume_cont_event();
         }
 
         Ok(Some((child_pid, status_code)))

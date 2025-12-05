@@ -362,17 +362,17 @@ fn handle_stopped_state(curr: &CurrentTask, thr: &Thread) {
 pub(crate) fn do_stop(stop_signal: Signo) {
     let curr = current();
     let curr_thread = curr.as_thread();
-    let curr_process = &curr_thread.proc_data.proc;
+    let curr_process_data = &curr_thread.proc_data;
 
     // If current process is not running, do nothing.
-    if !curr_process.is_running() {
-        warn!("Process {} is not running", curr_process.pid());
+    if !curr_process_data.proc.is_running() {
+        warn!("Process {} is not running", curr_process_data.proc.pid());
         return;
     }
 
     info!(
         "Process {} stopping due to signal {}",
-        curr_process.pid(),
+        curr_process_data.proc.pid(),
         stop_signal as u8
     );
 
@@ -380,20 +380,20 @@ pub(crate) fn do_stop(stop_signal: Signo) {
     curr_thread.proc_data.signal.remove_signal(Signo::SIGCONT);
 
     // remove all SIGCONT signals pending in each thread's queue
-    curr_process.threads().iter().for_each(|tid| {
+    curr_process_data.proc.threads().iter().for_each(|tid| {
         if let Ok(thread) = get_task(*tid) {
             thread.as_thread().signal.remove_signal(Signo::SIGCONT);
         }
     });
 
     // record the stop signal in the Process for waitpid reporting
-    curr_process.set_stop_signal(stop_signal as u8);
+    curr_process_data.signal.set_stop_signal(stop_signal);
 
     // change the state of current process to `STOPPED`
-    curr_process.transition_to_stopped();
+    curr_process_data.proc.transition_to_stopped();
 
     // notify parent process for this stoppage state change
-    if let Some(parent) = curr_process.parent()
+    if let Some(parent) = curr_process_data.proc.parent()
         && let Ok(parent_data) = get_process_data(parent.pid())
     {
         parent_data.child_exit_event.wake();
@@ -416,41 +416,44 @@ pub(crate) fn do_stop(stop_signal: Signo) {
 pub(crate) fn do_continue() {
     let curr = current();
     let curr_thread = curr.as_thread();
-    let curr_proc = &curr_thread.proc_data.proc;
+    let curr_proc_data = &curr_thread.proc_data;
 
     // If current process is not stopped, do nothing.
-    if !curr_proc.is_stopped() {
-        warn!("Process {} is not stopped", curr_proc.pid());
+    if !curr_proc_data.proc.is_stopped() {
+        warn!("Process {} is not stopped", curr_proc_data.proc.pid());
         return;
     }
 
-    info!("Process {} continuing due to signal", curr_proc.pid());
+    info!(
+        "Process {} continuing due to signal",
+        curr_proc_data.proc.pid()
+    );
 
     // remove all stopping signals pending in the process's queue
-    curr_thread.proc_data.signal.flush_stop_signals();
+    curr_proc_data.signal.flush_stop_signals();
 
     // remove all stopping signals pending in each thread's queue
-    for thread_pid in curr_proc.threads().iter() {
+    for thread_pid in curr_proc_data.proc.threads().iter() {
         if let Ok(thread) = get_task(*thread_pid) {
             thread.as_thread().signal.flush_stop_signals();
         }
     }
 
     // record the continue event in the Process for waitpid reporting
-    curr_proc.set_cont_signal();
+    curr_proc_data.signal.set_cont_signal();
 
     // change the state of current process to `RUNNING`
-    curr_proc.transition_to_running();
+    curr_proc_data.proc.transition_to_running();
 
     // wake up all threads
-    for thread_pid in curr_proc.threads().iter() {
+    for thread_pid in curr_proc_data.proc.threads().iter() {
         if let Ok(thread) = get_task(*thread_pid) {
             thread.interrupt();
         }
     }
 
     // Notify parent process for this continuation state change
-    if let Some(parent) = curr_proc.parent()
+    if let Some(parent) = curr_proc_data.proc.parent()
         && let Ok(parent_data) = get_process_data(parent.pid())
     {
         parent_data.child_exit_event.wake();
